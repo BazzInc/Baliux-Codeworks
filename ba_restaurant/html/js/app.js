@@ -4,12 +4,13 @@ const closeBtn = document.getElementById('closeBtn');
 const isTvDisplay = new URLSearchParams(window.location.search).get('tv') === '1';
 if (isTvDisplay) document.body.classList.add('tv-display');
 
-let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, managerTab: 'categories', editing: null, adminRestaurant: null, cashierSearch: '', submittingOrder: false };
+let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, managerTab: 'categories', editing: null, adminRestaurant: null, cashierSearch: '', submittingOrder: false, confirmDialog: null };
 
 function closeUi(){
   state.view = null;
   state.restaurantId = null;
   state.modalProduct = null;
+  state.confirmDialog = null;
   state.submittingOrder = false;
   app.classList.add('hidden');
   app.classList.remove('tv-app');
@@ -152,6 +153,28 @@ function lastOrderHtml(){
 }
 
 
+function openConfirm(title, text, postName, data){
+  state.confirmDialog = { title, text, postName, data };
+  render();
+}
+function confirmHtml(){
+  const c = state.confirmDialog;
+  if(!c) return '';
+  return `<div class="modal-back confirm-back"><div class="modal confirm-modal"><div class="modal-content"><h2>${safe(c.title)}</h2><p>${safe(c.text)}</p><div class="modal-actions"><button class="btn" id="confirmCancel">Abbrechen</button><button class="btn danger" id="confirmOk">Endgueltig loeschen</button></div></div></div></div>`;
+}
+function bindConfirm(){
+  if(!state.confirmDialog) return;
+  const cancel = document.getElementById('confirmCancel');
+  const ok = document.getElementById('confirmOk');
+  if(cancel) cancel.onclick = () => { state.confirmDialog = null; render(); };
+  if(ok) ok.onclick = () => {
+    const c = state.confirmDialog;
+    state.confirmDialog = null;
+    if(c) post(c.postName, c.data || {});
+    render();
+  };
+}
+
 function renderOrders(){
   const raw = state.payload.orders || [];
   if(raw && raw.ok === false){ content.innerHTML = `<section class="screen"><h1>${state.view==='kitchen'?'Küchensteuerung':'Kasse'}</h1><div class="panel"><p class="muted">${safe(raw.error||'Keine Berechtigung.')}</p></div></section>`; return; }
@@ -177,7 +200,8 @@ function renderManager(){
   if(!state.payload.ok){ content.innerHTML=`<section class="panel"><h1>Manager</h1><p>${safe(state.payload.error||'Keine Berechtigung.')}</p></section>`; return; }
   const tabs=['categories','products','menus','cash'];
   content.innerHTML=`<section class="manager compact-manager"><div class="manager-top"><h1>Manager-Laptop</h1></div><div class="manager-grid"><aside class="side">${tabs.map(t=>`<button class="btn ${state.managerTab===t?'primary':''}" data-mtab="${t}">${t==='categories'?'Kategorien':t==='products'?'Produkte':t==='menus'?'Menüs':'Kasse'}</button>`).join('')}</aside><section class="panel">${managerPanel()}</section></div></section>`;
-  document.querySelectorAll('[data-mtab]').forEach(b=>b.onclick=()=>{state.managerTab=b.dataset.mtab;state.editing=null;renderManager();}); bindManager();
+  content.insertAdjacentHTML('beforeend', confirmHtml());
+  document.querySelectorAll('[data-mtab]').forEach(b=>b.onclick=()=>{state.managerTab=b.dataset.mtab;state.editing=null;renderManager();}); bindManager(); bindConfirm();
 }
 function managerPanel(){ return state.managerTab==='categories'?categoryPanel():state.managerTab==='products'?productPanel():state.managerTab==='menus'?menuPanel():cashPanel(); }
 function paymentItemsHtml(row){
@@ -196,8 +220,8 @@ function cashPanel(){
   const orders=stats.orders||[], cashiers=stats.cashiers||[], payments=stats.payments||[];
   return '<h2>Kasse</h2><div class="stats"><div><small>Heute bar</small><b>'+money(stats.today)+'</b></div><div><small>Offener Kassensturz</small><b>'+money(stats.open)+'</b></div><div><small>Heute Karte</small><b>'+money(stats.cardToday)+'</b></div><div><small>Gesamt Karte</small><b>'+money(stats.cardTotal)+'</b></div></div><h2>Kassensturz</h2><div class="cash-close-list">'+(cashiers.length?cashiers.map(c=>'<article class="cash-close-card"><div><b>'+safe(c.cashier_name||'Unbekannt')+'</b><span>'+Number(c.order_count||0)+' Zahlung(en) - '+fmtTime(c.first_paid_time)+' bis '+fmtTime(c.last_paid_time)+'</span></div><strong>'+money(c.total)+'</strong><button class="btn mini primary" data-closecash="'+safe(c.cashier_identifier||'')+'">Kassensturz abschliessen</button></article>').join(''):'<p class="muted">Keine offenen Bar-Einnahmen fuer einen Kassensturz.</p>')+'</div><h2>Buchungen</h2><div class="payment-list">'+(payments.length?payments.map(paymentCard).join(''):'<p class="muted">Noch keine Buchungen vorhanden.</p>')+'</div><h2>Letzte Barzahlungen</h2><table class="table"><tr><th>Bestellung</th><th>Betrag</th><th>Kassierer</th><th>Zeit</th><th>Status</th></tr>'+orders.map(o=>'<tr><td>#'+o.order_number+'</td><td>'+money(o.total)+'</td><td>'+safe(o.cashier_name||o.cashier_identifier||'-')+'</td><td>'+fmtTime(o.paid_time||o.paid_at||o.updated_at)+'</td><td>'+(o.cash_closed_at?'Abgeschlossen':'Offen')+'</td></tr>').join('')+'</table>';
 }
-function categoryPanel(){ const cats=state.payload.categories||[]; const e=state.editing||{}; return `<h2>Kategorien</h2><div class="form"><input id="catLabel" class="full" placeholder="Kategoriename" value="${safe(e.label || e.name)}"><input id="catImage" class="full" placeholder="Bild-URL" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="catImagePreview">${imgTag({image:e.image}, e.label||'Kategorie')}</div></div><input id="catSort" type="number" placeholder="Sortierung" value="${safe(e.sort_order||1)}"><select id="catEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><button class="btn primary" id="saveCat">Speichern</button></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Sort</th><th></th></tr>${cats.map(c=>`<tr><td><div class="table-img">${imgTag(c,c.label)}</div></td><td>${safe(c.label)}</td><td>${c.sort_order}</td><td><button class="btn mini" data-editcat="${c.id}">Bearbeiten</button><button class="btn mini" data-delcat="${c.id}">Deaktivieren</button></td></tr>`).join('')}</table>`; }
-function productPanel(){ const cats=state.payload.categories||[], products=state.payload.products||[], e=state.editing||{}; const isEdit=!!e.id; return `<div class="manager-headline"><div><h2>PRODUKTE</h2></div><button class="btn" id="newProd">+ Neues Produkt</button></div><div class="form"><select id="prodCat">${cats.map(c=>`<option value="${safe(c.name)}" ${e.category===c.name?'selected':''}>${safe(c.label)}</option>`).join('')}</select><input id="prodLabel" placeholder="Name" value="${safe(e.label)}"><input id="prodPrice" type="number" step="0.01" min="0" placeholder="Preis" value="${safe(e.price||'')}"><select id="prodEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><input id="prodImage" class="full" placeholder="Bild-Link" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="prodImagePreview">${imgTag({image:e.image}, e.label||'Vorschau')}</div><div><input id="oxImageSearch" placeholder="Bild" value=""><div class="ox-suggestions" id="oxImageSuggestions"></div></div></div><div class="full form-actions"><button class="btn primary" id="saveProd">${isEdit?'Änderungen speichern':'Produkt hinzufügen'}</button>${isEdit?'<button class="btn" id="duplicateProd">Als neues Produkt kopieren</button><button class="btn" id="cancelProdEdit">Bearbeitung abbrechen</button>':''}</div></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Preis</th><th></th></tr>${products.map(p=>`<tr><td><div class="table-img">${imgTag(p,p.label)}</div></td><td>${safe(p.label)}</td><td>${money(p.price)}</td><td><button class="btn mini" data-editprod="${p.id}">Bearbeiten</button><button class="btn mini" data-toggleprod="${p.id}" data-enabled="${Number(p.enabled)?0:1}">${Number(p.enabled)?'Deaktivieren':'Aktivieren'}</button></td></tr>`).join('')}</table>`; }
+function categoryPanel(){ const cats=state.payload.categories||[]; const e=state.editing||{}; return `<h2>Kategorien</h2><div class="form"><input id="catLabel" class="full" placeholder="Kategoriename" value="${safe(e.label || e.name)}"><input id="catImage" class="full" placeholder="Bild-URL" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="catImagePreview">${imgTag({image:e.image}, e.label||'Kategorie')}</div></div><input id="catSort" type="number" placeholder="Sortierung" value="${safe(e.sort_order||1)}"><select id="catEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><button class="btn primary" id="saveCat">Speichern</button></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Sort</th><th></th></tr>${cats.map(c=>{ const disabled=Number(c.enabled)===0; return `<tr class="${disabled?'is-disabled':''}"><td><div class="table-img">${imgTag(c,c.label)}</div></td><td>${safe(c.label)}</td><td>${c.sort_order}</td><td><button class="btn mini" data-editcat="${c.id}">Bearbeiten</button>${disabled?`<button class="btn mini" data-togglecat="${c.id}">Aktivieren</button><button class="btn mini danger" data-harddelcat="${c.id}">Endgültig löschen</button>`:`<button class="btn mini" data-delcat="${c.id}">Deaktivieren</button>`}</td></tr>`; }).join('')}</table>`; }
+function productPanel(){ const cats=state.payload.categories||[], products=state.payload.products||[], e=state.editing||{}; const isEdit=!!e.id; return `<div class="manager-headline"><div><h2>PRODUKTE</h2></div><button class="btn" id="newProd">+ Neues Produkt</button></div><div class="form"><select id="prodCat">${cats.map(c=>`<option value="${safe(c.name)}" ${e.category===c.name?'selected':''}>${safe(c.label)}</option>`).join('')}</select><input id="prodLabel" placeholder="Name" value="${safe(e.label)}"><input id="prodPrice" type="number" step="0.01" min="0" placeholder="Preis" value="${safe(e.price||'')}"><select id="prodEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><input id="prodImage" class="full" placeholder="Bild-Link" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="prodImagePreview">${imgTag({image:e.image}, e.label||'Vorschau')}</div><div><input id="oxImageSearch" placeholder="Bild" value=""><small class="muted ox-hint">Mindestens 3 Anfangsbuchstaben eingeben, dann erscheinen Bilder aus dem Inventory.</small><div class="ox-suggestions" id="oxImageSuggestions"></div></div></div><div class="full form-actions"><button class="btn primary" id="saveProd">${isEdit?'Änderungen speichern':'Produkt hinzufügen'}</button>${isEdit?'<button class="btn" id="duplicateProd">Als neues Produkt kopieren</button><button class="btn" id="cancelProdEdit">Bearbeitung abbrechen</button>':''}</div></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Preis</th><th></th></tr>${products.map(p=>{ const disabled=Number(p.enabled)===0; return `<tr class="${disabled?'is-disabled':''}"><td><div class="table-img">${imgTag(p,p.label)}</div></td><td>${safe(p.label)}</td><td>${money(p.price)}</td><td><button class="btn mini" data-editprod="${p.id}">Bearbeiten</button><button class="btn mini" data-toggleprod="${p.id}" data-enabled="${Number(p.enabled)?0:1}">${Number(p.enabled)?'Deaktivieren':'Aktivieren'}</button>${disabled?`<button class="btn mini danger" data-harddelprod="${p.id}">Endgültig löschen</button>`:''}</td></tr>`; }).join('')}</table>`; }
 function menuPanel(){ const products=state.payload.products||[], menus=state.payload.menus||[], e=state.editing||{}; let chosen=[]; try{chosen=JSON.parse(e.products_json||'[]')}catch(x){} return `<h2>Menüs</h2><div class="form"><input id="menuLabel" placeholder="Menüname" value="${safe(e.label)}"><input id="menuPrice" type="number" step="0.01" placeholder="Eigener Preis optional" value="${safe(e.price||'')}"><div class="full">${products.map(p=>`<label style="display:inline-block;margin:6px 12px 6px 0"><input type="checkbox" class="menuProd" value="${p.id}" ${chosen.includes(Number(p.id))?'checked':''}> ${safe(p.label)} (${money(p.price)})</label>`).join('')}</div><button class="btn primary full" id="saveMenu">Menü speichern</button></div><table class="table"><tr><th>ID</th><th>Name</th><th>Preis</th><th>Status</th><th></th></tr>${menus.map(m=>`<tr><td>${m.id}</td><td>${safe(m.label)}</td><td>${money(m.price)}</td><td>${Number(m.enabled)?'Aktiv':'Inaktiv'}</td><td><button class="btn mini" data-editmenu="${m.id}">Bearbeiten</button><button class="btn mini" data-delmenu="${m.id}">Deaktivieren</button></td></tr>`).join('')}</table>`; }
 function bindManager(){
   (document.getElementById('saveCat')||{}).onclick=()=>post('saveCategory',{id:state.editing?.id,restaurantId:state.restaurantId,label:catLabel.value,image:catImage.value,sort_order:Number(catSort.value),enabled:catEnabled.value==='1'});
@@ -234,8 +258,10 @@ function bindManager(){
   document.querySelectorAll('[data-editprod]').forEach(b=>b.onclick=()=>{state.editing=(state.payload.products||[]).find(x=>Number(x.id)===Number(b.dataset.editprod));renderManager();});
   document.querySelectorAll('[data-editmenu]').forEach(b=>b.onclick=()=>{state.editing=(state.payload.menus||[]).find(x=>Number(x.id)===Number(b.dataset.editmenu));renderManager();});
   document.querySelectorAll('[data-delcat]').forEach(b=>b.onclick=()=>post('deleteCategory',{restaurantId:state.restaurantId,id:Number(b.dataset.delcat)}));
-  document.querySelectorAll('[data-delprod]').forEach(b=>b.onclick=()=>post('deleteProduct',{restaurantId:state.restaurantId,id:Number(b.dataset.delprod)}));
-  document.querySelectorAll('[data-toggleprod]').forEach(b=>b.onclick=()=>{ const p=(state.payload.products||[]).find(x=>Number(x.id)===Number(b.dataset.toggleprod)); if(!p) return; post('saveProduct',{id:p.id,restaurantId:state.restaurantId,category:p.category,label:p.label,price:Number(p.price),image:p.image||'',description:'',enabled:b.dataset.enabled==='1'}); });
+  document.querySelectorAll('[data-togglecat]').forEach(b=>b.onclick=()=>{ const c=(state.payload.categories||[]).find(x=>Number(x.id)===Number(b.dataset.togglecat)); if(!c) return; post('saveCategory',{id:c.id,restaurantId:state.restaurantId,label:c.label||c.name,image:c.image||'',sort_order:Number(c.sort_order||1),enabled:true}); });
+  document.querySelectorAll('[data-harddelcat]').forEach(b=>b.onclick=()=>openConfirm('Kategorie loeschen', 'Diese Kategorie wird endgueltig entfernt.', 'hardDeleteCategory', {restaurantId:state.restaurantId,id:Number(b.dataset.harddelcat)}));
+  document.querySelectorAll('[data-harddelprod]').forEach(b=>b.onclick=()=>openConfirm('Produkt loeschen', 'Dieses Produkt wird endgueltig entfernt.', 'hardDeleteProduct', {restaurantId:state.restaurantId,id:Number(b.dataset.harddelprod)}));
+  document.querySelectorAll('[data-toggleprod]').forEach(b=>b.onclick=()=>{ const p=(state.payload.products||[]).find(x=>Number(x.id)===Number(b.dataset.toggleprod)); if(!p) return; post('saveProduct',{id:p.id,restaurantId:state.restaurantId,category:p.category,label:p.label,price:Number(p.price),item_name:p.item_name||'',image:p.image||'',description:p.description||'',enabled:b.dataset.enabled==='1'}); });
   document.querySelectorAll('[data-delmenu]').forEach(b=>b.onclick=()=>post('deleteMenu',{restaurantId:state.restaurantId,id:Number(b.dataset.delmenu)}));
 }
 
@@ -251,7 +277,8 @@ function renderAdmin(){
   applyTheme((e && e.theme) || (active && active.theme));
   const types = ['terminals','manager','kitchen','pickup','cashier'];
   content.innerHTML = `<section class="manager admin-creator"><div class="manager-top"><h1>Restaurant-Creator</h1></div><div class="manager-grid"><aside class="side"><button class="btn primary" id="newRestaurant">+ Neuer Laden</button>${list.map(r=>`<button class="btn ${r.id===state.adminRestaurant?'primary':''} ${Number(r.enabled??1)?'':'is-disabled'}" data-adminrest="${safe(r.id)}">${safe(r.label)}<small>${safe(r.id)}${Number(r.enabled??1)?'':' · deaktiviert'}</small></button>`).join('')}</aside><section class="panel">${adminPanel(e, active, types)}</section></div></section>`;
-  bindAdmin();
+  content.insertAdjacentHTML('beforeend', confirmHtml());
+  bindAdmin(); bindConfirm();
 }
 function adminPanel(e, active, types){
   const isNew = !(e && e.id);
@@ -279,7 +306,7 @@ function bindAdmin(){
   ['themePrimary','themeAccent','themeBackground'].forEach(id=>{ const el=document.getElementById(id); if(el) el.oninput=()=>applyTheme(readThemeInputs()); });
   (document.getElementById('saveRestaurant')||{}).onclick=()=>post('saveRestaurant',{id:adminId.value,label:adminLabel.value,job:adminJob.value,societyAccount:adminSociety.value,theme:readThemeInputs()});
   (document.getElementById('deleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('deleteRestaurant',{restaurantId:state.adminRestaurant}); };
-  (document.getElementById('hardDeleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant && confirm('Restaurant endgueltig loeschen? Produkte, Punkte, Menues, Bestellungen und Buchungen werden entfernt.')) post('hardDeleteRestaurant',{restaurantId:state.adminRestaurant,confirm:true}); };
+  (document.getElementById('hardDeleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) openConfirm('Laden loeschen', 'Produkte, Punkte, Menues, Bestellungen und Buchungen werden endgueltig entfernt.', 'hardDeleteRestaurant', {restaurantId:state.adminRestaurant,confirm:true}); };
   (document.getElementById('openManagerForRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('openRestaurantManager',{restaurantId:state.adminRestaurant}); };
   document.querySelectorAll('[data-setpoint]').forEach(b=>b.onclick=()=>{ const size=b.closest('.point-box')?.querySelector('.monitor-size')?.value; if(state.adminRestaurant) post('setPointHere',{restaurantId:state.adminRestaurant,pointType:b.dataset.setpoint,screenSize:size}); });
   document.querySelectorAll('[data-placetv]').forEach(b=>b.onclick=()=>{ const size=b.closest('.point-box')?.querySelector('.monitor-size')?.value || 'large'; if(state.adminRestaurant) post('placeMonitorTv',{restaurantId:state.adminRestaurant,pointType:b.dataset.placetv,screenSize:size}); });

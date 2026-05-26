@@ -939,6 +939,10 @@ end)
 
 local function refreshManager(src, restaurantId) TriggerClientEvent('ba_restaurant:managerRefresh', src, restaurantId) end
 
+local function isDisabled(value)
+    return value == false or tonumber(value) == 0 or tostring(value) == '0'
+end
+
 RegisterNetEvent('ba_restaurant:saveCategory', function(data)
     local src = source
     if type(data) ~= 'table' then return end
@@ -976,12 +980,46 @@ RegisterNetEvent('ba_restaurant:deleteCategory', function(restaurantId, id)
     TriggerClientEvent('ba_restaurant:menuRefresh', -1, restaurantId)
 end)
 
+RegisterNetEvent('ba_restaurant:hardDeleteCategory', function(restaurantId, id)
+    local src = source
+    restaurantId = slug(restaurantId)
+    id = tonumber(id)
+    if not id then return end
+    if not hasManagementAccess(src, restaurantId) then notify(src, 'Keine Berechtigung.', 'error') return end
+
+    local category = MySQL.single.await('SELECT id, enabled FROM ba_restaurant_categories WHERE id = ? AND restaurant_id = ?', { id, restaurantId })
+    if not category then notify(src, 'Kategorie nicht gefunden.', 'error') return end
+    if not isDisabled(category.enabled) then notify(src, 'Kategorie erst deaktivieren, dann loeschen.', 'error') return end
+
+    MySQL.update.await('DELETE FROM ba_restaurant_categories WHERE id = ? AND restaurant_id = ? AND enabled = 0', { id, restaurantId })
+    notify(src, 'Kategorie endgueltig geloescht.', 'success')
+    refreshManager(src, restaurantId)
+    TriggerClientEvent('ba_restaurant:menuRefresh', -1, restaurantId)
+end)
+
 RegisterNetEvent('ba_restaurant:deleteProduct', function(restaurantId, id)
     local src = source
     restaurantId = slug(restaurantId)
     if not hasManagementAccess(src, restaurantId) then notify(src, 'Keine Berechtigung.', 'error') return end
     MySQL.update.await('UPDATE ba_restaurant_products SET enabled = 0 WHERE id = ? AND restaurant_id = ?', { id, restaurantId })
     notify(src, 'Produkt deaktiviert.', 'success')
+    refreshManager(src, restaurantId)
+    TriggerClientEvent('ba_restaurant:menuRefresh', -1, restaurantId)
+end)
+
+RegisterNetEvent('ba_restaurant:hardDeleteProduct', function(restaurantId, id)
+    local src = source
+    restaurantId = slug(restaurantId)
+    id = tonumber(id)
+    if not id then return end
+    if not hasManagementAccess(src, restaurantId) then notify(src, 'Keine Berechtigung.', 'error') return end
+
+    local product = MySQL.single.await('SELECT id, enabled FROM ba_restaurant_products WHERE id = ? AND restaurant_id = ?', { id, restaurantId })
+    if not product then notify(src, 'Produkt nicht gefunden.', 'error') return end
+    if not isDisabled(product.enabled) then notify(src, 'Produkt erst deaktivieren, dann loeschen.', 'error') return end
+
+    MySQL.update.await('DELETE FROM ba_restaurant_products WHERE id = ? AND restaurant_id = ? AND enabled = 0', { id, restaurantId })
+    notify(src, 'Produkt endgueltig geloescht.', 'success')
     refreshManager(src, restaurantId)
     TriggerClientEvent('ba_restaurant:menuRefresh', -1, restaurantId)
 end)
