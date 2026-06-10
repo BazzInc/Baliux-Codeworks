@@ -235,6 +235,7 @@ body:not(.tv-display){background:transparent!important}
 .tip-modal{width:500px}.tip-modal p{margin:0 0 18px}.tip-options{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}.tip-options .btn{padding:12px 10px}.tip-custom{display:grid;gap:7px;color:#ffcfaa;font-weight:800;margin-bottom:14px}.tip-total{display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);padding:12px 0;margin-bottom:16px}.tip-total b{font-size:28px;color:var(--theme-accent)}
 .side .is-disabled{opacity:.58;border-style:dashed}
 .monitor-size{margin:8px 8px 8px 0;width:auto;min-width:160px}
+.monitor-options{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.monitor-options select,.monitor-options input{width:auto;min-width:120px}.monitor-options .monitor-range{max-width:120px}
 .payment-list{display:grid;gap:10px;margin:10px 0 18px}
 .payment-card{border:1px solid rgba(var(--theme-primary-rgb),.20);border-radius:12px;background:rgba(255,255,255,.035);padding:12px;cursor:pointer}
 .payment-card:hover{border-color:rgba(var(--theme-accent-rgb),.50);background:rgba(var(--theme-accent-rgb),.07)}

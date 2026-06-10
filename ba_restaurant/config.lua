@@ -50,13 +50,15 @@ Config.Tips = {
 Config.MonitorSounds = {
     kitchen = {
         enabled = true,
-        soundName = 'CHECKPOINT_NORMAL',
-        soundSet = 'HUD_MINI_GAME_SOUNDSET'
+        file = 'sounds/kitchen_bell.wav',
+        volume = 0.85,
+        range = 18.0
     },
     pickup = {
         enabled = true,
-        soundName = 'TIMER_STOP',
-        soundSet = 'HUD_MINI_GAME_SOUNDSET'
+        file = 'sounds/pickup_chime.wav',
+        volume = 0.65,
+        range = 18.0
     }
 }
 

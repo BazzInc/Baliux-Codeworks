@@ -429,6 +429,8 @@ local function ensureSchema()
       `heading` double NOT NULL DEFAULT 0,
       `prop_model` varchar(96) DEFAULT NULL,
       `screen_size` varchar(32) DEFAULT NULL,
+      `sound_enabled` tinyint(1) DEFAULT NULL,
+      `sound_range` double DEFAULT NULL,
       `enabled` tinyint(1) NOT NULL DEFAULT 1,
       PRIMARY KEY (`id`), KEY `restaurant_id` (`restaurant_id`), KEY `point_type` (`point_type`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;]])
@@ -516,6 +518,8 @@ local function ensureSchema()
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_categories ADD COLUMN image varchar(512) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN prop_model varchar(96) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN screen_size varchar(32) DEFAULT NULL') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN sound_enabled tinyint(1) DEFAULT NULL') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN sound_range double DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_identifier varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_name varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN subtotal decimal(10,2) NOT NULL DEFAULT 0.00') end)
@@ -618,7 +622,7 @@ local function loadRestaurants(includeDisabled)
         if r then
             r.points = r.points or { terminals = {}, manager = {}, kitchen = {}, pickup = {}, cashier = {} }
             r.points[p.point_type] = r.points[p.point_type] or {}
-            table.insert(r.points[p.point_type], { id = p.id, x = p.x, y = p.y, z = p.z, heading = p.heading, label = p.label, point_type = p.point_type, prop_model = p.prop_model, screen_size = p.screen_size, enabled = tonumber(p.enabled) == 1 })
+            table.insert(r.points[p.point_type], { id = p.id, x = p.x, y = p.y, z = p.z, heading = p.heading, label = p.label, point_type = p.point_type, prop_model = p.prop_model, screen_size = p.screen_size, sound_enabled = p.sound_enabled, sound_range = p.sound_range, enabled = tonumber(p.enabled) == 1 })
         end
     end
 
@@ -705,7 +709,7 @@ RegisterNetEvent('ba_restaurant:adminHardDeleteRestaurant', function(data)
     TriggerClientEvent('ba_restaurant:restaurantsRefresh', -1)
 end)
 
-RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointType, x, y, z, heading, propModel, screenSize)
+RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointType, x, y, z, heading, propModel, screenSize, soundEnabled, soundRange)
     local src = source
     if not isAdmin(src) then notify(src, 'Keine Berechtigung.', 'error') return end
     restaurantId = slug(restaurantId)
@@ -717,8 +721,15 @@ RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointTyp
     if propModel == '' then propModel = nil end
     screenSize = sanitizeText(screenSize, 32)
     if screenSize ~= 'small' and screenSize ~= 'large' then screenSize = nil end
-    MySQL.insert.await('INSERT INTO ba_restaurant_points (restaurant_id, point_type, label, x, y, z, heading, prop_model, screen_size, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)', {
-        restaurantId, pointType, labels[pointType], tonumber(x), tonumber(y), tonumber(z), tonumber(heading) or 0, propModel, screenSize
+    local soundEnabledValue = nil
+    local soundRangeValue = nil
+    if pointType == 'kitchen' or pointType == 'pickup' then
+        soundEnabledValue = soundEnabled == true and 1 or 0
+        soundRangeValue = tonumber(soundRange)
+        if not soundRangeValue or soundRangeValue < 1.0 then soundRangeValue = nil end
+    end
+    MySQL.insert.await('INSERT INTO ba_restaurant_points (restaurant_id, point_type, label, x, y, z, heading, prop_model, screen_size, sound_enabled, sound_range, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)', {
+        restaurantId, pointType, labels[pointType], tonumber(x), tonumber(y), tonumber(z), tonumber(heading) or 0, propModel, screenSize, soundEnabledValue, soundRangeValue
     })
     loadRestaurants()
     notify(src, labels[pointType] .. ' gesetzt.', 'success')

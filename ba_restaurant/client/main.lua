@@ -314,7 +314,7 @@ RegisterNUICallback('setPointHere', function(data, cb)
     local ped = PlayerPedId()
     local coords = GetEntityCoords(ped)
     local heading = GetEntityHeading(ped)
-    TriggerServerEvent('ba_restaurant:adminSavePoint', data.restaurantId, data.pointType, coords.x, coords.y, coords.z, heading, nil, data.screenSize)
+    TriggerServerEvent('ba_restaurant:adminSavePoint', data.restaurantId, data.pointType, coords.x, coords.y, coords.z, heading, nil, data.screenSize, data.soundEnabled, data.soundRange)
     cb({ ok = true })
 end)
 RegisterNUICallback('deletePoint', function(data, cb) TriggerServerEvent('ba_restaurant:adminDeletePoint', data.id) cb({ ok = true }) end)
@@ -386,7 +386,38 @@ end
 local function playMonitorSound(group)
     local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
     if not cfg or cfg.enabled ~= true then return end
+    if cfg.file and cfg.file ~= '' then
+        SendNUIMessage({ action = 'playMonitorSound', file = cfg.file, volume = cfg.volume or 0.8 })
+        return
+    end
     PlaySoundFrontend(-1, cfg.soundName or 'CHECKPOINT_NORMAL', cfg.soundSet or 'HUD_MINI_GAME_SOUNDSET', true)
+end
+
+local function pointSoundEnabled(group, point)
+    if point and point.sound_enabled ~= nil then
+        return point.sound_enabled == true or tonumber(point.sound_enabled) == 1
+    end
+    return monitorSoundEnabled(group)
+end
+
+local function pointSoundRange(group, point)
+    local range = point and tonumber(point.sound_range)
+    if range and range > 0 then return range end
+    local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
+    return (cfg and tonumber(cfg.range)) or (Config.MonitorLiveDisplay and Config.MonitorLiveDisplay.drawDistance) or 18.0
+end
+
+local function canHearMonitorSound(restaurantId, group)
+    local restaurant = restaurants and restaurants[restaurantId]
+    if not restaurant or not restaurant.points or not restaurant.points[group] then return false end
+    local playerCoords = GetEntityCoords(PlayerPedId())
+    for _, point in ipairs(restaurant.points[group] or {}) do
+        if pointSoundEnabled(group, point) then
+            local coords = vector3(point.x or point.coords.x, point.y or point.coords.y, point.z or point.coords.z)
+            if #(playerCoords - coords) <= pointSoundRange(group, point) then return true end
+        end
+    end
+    return false
 end
 
 local function indexOrders(orders, onlyReady)
@@ -411,8 +442,8 @@ local function handleMonitorSounds(restaurantId, result)
     local state = monitorSoundState[restaurantId] or {}
     local kitchenNow = indexOrders(result and result.kitchen or {}, false)
     local pickupReadyNow = indexOrders(result and result.pickup or {}, true)
-    if monitorSoundEnabled('kitchen') and hasNewOrder(state.kitchen, kitchenNow) then playMonitorSound('kitchen') end
-    if monitorSoundEnabled('pickup') and hasNewOrder(state.pickupReady, pickupReadyNow) then playMonitorSound('pickup') end
+    if monitorSoundEnabled('kitchen') and hasNewOrder(state.kitchen, kitchenNow) and canHearMonitorSound(restaurantId, 'kitchen') then playMonitorSound('kitchen') end
+    if monitorSoundEnabled('pickup') and hasNewOrder(state.pickupReady, pickupReadyNow) and canHearMonitorSound(restaurantId, 'pickup') then playMonitorSound('pickup') end
     monitorSoundState[restaurantId] = { kitchen = kitchenNow, pickupReady = pickupReadyNow }
 end
 
@@ -692,6 +723,8 @@ local function startMonitorPlacement(data)
     local restaurantId = data and data.restaurantId
     local pointType = data and data.pointType
     local screenSize = data and data.screenSize
+    local soundEnabled = data and data.soundEnabled
+    local soundRange = data and data.soundRange
     if not restaurantId or (pointType ~= 'kitchen' and pointType ~= 'pickup') then return end
 
     SendNUIMessage({ action = 'forceClose' })
@@ -753,7 +786,7 @@ local function startMonitorPlacement(data)
 
         if IsControlJustReleased(0, 191) then -- Enter
             DeleteEntity(obj)
-            TriggerServerEvent('ba_restaurant:adminSavePoint', restaurantId, pointType, coords.x, coords.y, coords.z, heading, model, screenSize)
+            TriggerServerEvent('ba_restaurant:adminSavePoint', restaurantId, pointType, coords.x, coords.y, coords.z, heading, model, screenSize, soundEnabled, soundRange)
             notify('TV-Monitor gespeichert.', 'success')
             break
         elseif IsControlJustReleased(0, 177) then -- Backspace
