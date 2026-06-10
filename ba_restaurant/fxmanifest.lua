@@ -4,7 +4,7 @@ game 'gta5'
 name 'ba_restaurant'
 author 'Baliux Codeworks'
 description 'Restaurant Creator'
-version '1.1.1'
+version '1.1.4'
 
 lua54 'yes'
 

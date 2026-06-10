@@ -41,6 +41,25 @@ Config.GiveCashReceiptItem = Config.GiveOrderPaperItem
 
 Config.CashStatsLimit = 50
 
+Config.Tips = {
+    enabled = true,
+    presets = { 10, 20, 30 },
+    maxAmount = 1000.0
+}
+
+Config.MonitorSounds = {
+    kitchen = {
+        enabled = true,
+        soundName = 'CHECKPOINT_NORMAL',
+        soundSet = 'HUD_MINI_GAME_SOUNDSET'
+    },
+    pickup = {
+        enabled = true,
+        soundName = 'TIMER_STOP',
+        soundSet = 'HUD_MINI_GAME_SOUNDSET'
+    }
+}
+
 Config.Restaurants = {}
 
 Config.Notifications = {

@@ -4,12 +4,13 @@ const closeBtn = document.getElementById('closeBtn');
 const isTvDisplay = new URLSearchParams(window.location.search).get('tv') === '1';
 if (isTvDisplay) document.body.classList.add('tv-display');
 
-let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, managerTab: 'categories', editing: null, adminRestaurant: null, cashierSearch: '', submittingOrder: false, confirmDialog: null };
+let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, tipModal: null, managerTab: 'categories', editing: null, adminRestaurant: null, cashierSearch: '', submittingOrder: false, confirmDialog: null };
 
 function closeUi(){
   state.view = null;
   state.restaurantId = null;
   state.modalProduct = null;
+  state.tipModal = null;
   state.confirmDialog = null;
   state.submittingOrder = false;
   app.classList.add('hidden');
@@ -99,12 +100,12 @@ window.addEventListener('message', (event) => {
   const data = event.data || {};
   if (data.action === 'tvDisplay') { applyTheme((data.payload || {}).theme); renderTvDisplay(data.payload || {}); return; }
   if (data.action === 'forceClose') { closeUi(); return; }
-  if (data.action === 'open') { state.view = data.view; state.restaurantId = data.restaurantId; state.payload = data.payload || {}; applyTheme(activeTheme()); state.cart = []; state.activeCategory = null; state.modalProduct = null; state.managerTab = 'categories'; state.editing = null; state.submittingOrder = false; app.classList.remove('hidden'); document.body.classList.add('menu-open'); render(); }
+  if (data.action === 'open') { state.view = data.view; state.restaurantId = data.restaurantId; state.payload = data.payload || {}; applyTheme(activeTheme()); state.cart = []; state.activeCategory = null; state.modalProduct = null; state.tipModal = null; state.managerTab = 'categories'; state.editing = null; state.submittingOrder = false; app.classList.remove('hidden'); document.body.classList.add('menu-open'); render(); }
   if (data.action === 'managerData') { state.payload = data.payload || {}; applyTheme(activeTheme()); state.editing = null; renderManager(); }
   if (data.action === 'adminData') { state.payload = data.payload || {}; applyTheme(activeTheme()); state.editing = null; renderAdmin(); }
   if (data.action === 'ordersRefresh') { state.payload.orders = data.payload.orders || []; renderOrders(); }
   if (data.action === 'menuData') { state.payload = data.payload || {}; state.activeCategory = null; renderTerminal(); }
-  if (data.action === 'orderCreated') { state.cart = []; state.modalProduct = null; state.submittingOrder = false; state.lastOrder = data.payload || {}; renderTerminal(); }
+  if (data.action === 'orderCreated') { state.cart = []; state.modalProduct = null; state.tipModal = null; state.submittingOrder = false; state.lastOrder = data.payload || {}; renderTerminal(); }
   if (data.action === 'orderFailed') { state.submittingOrder = false; renderTerminal(); }
 });
 
@@ -112,6 +113,26 @@ function render(){ if(state.view === 'terminal') renderTerminal(); else if(state
 function cartTotal(){ return state.cart.reduce((s,i)=>s+(Number(i.price)*Number(i.amount)),0); }
 function addToCart(product, amount=1){ const key=(product.type||'product')+':'+product.id; const f=state.cart.find(i=>i.key===key); if(f) f.amount += amount; else state.cart.push({ key, id: product.id, type: product.type||'product', label: product.label, price: Number(product.price), amount }); state.modalProduct=null; renderTerminal(); }
 function openProduct(product){ state.modalProduct = product; state.modalQty = 1; renderTerminal(); }
+function openTipModal(method){
+  if(state.payload.tips && state.payload.tips.enabled === false){ state.tipModal = { method, custom: '' }; submitOrderWithTip(0); return; }
+  state.tipModal = { method, custom: '' };
+  renderTerminal();
+}
+function submitOrderWithTip(tipAmount){
+  if(state.submittingOrder) return;
+  state.submittingOrder = true;
+  const method = state.tipModal?.method || 'card';
+  state.tipModal = null;
+  renderTerminal();
+  post('createOrder', { restaurantId: state.restaurantId, items: state.cart, paymentMethod: method, tipAmount: Number(tipAmount || 0) });
+}
+function tipModalHtml(){
+  if(!state.tipModal) return '';
+  const total = cartTotal();
+  const custom = Math.max(0, Number(state.tipModal.custom || 0));
+  const presets = (state.payload.tips && Array.isArray(state.payload.tips.presets) ? state.payload.tips.presets : [10,20,30]).filter(p=>Number(p)>0);
+  return `<div class="modal-back"><div class="modal tip-modal"><div class="modal-content"><h2>Trinkgeld</h2><p class="muted">Moechtest du Trinkgeld geben?</p><div class="tip-options"><button class="btn" data-tip="0">Ohne</button>${presets.map(p=>`<button class="btn" data-tip="${(total*(Number(p)/100)).toFixed(2)}">${Number(p)}%</button>`).join('')}</div><label class="tip-custom"><span>Freier Betrag</span><input id="customTip" type="number" min="0" step="0.01" value="${safe(state.tipModal.custom || '')}" placeholder="0.00"></label><div class="tip-total"><span>Gesamt</span><b>${money(total + custom)}</b></div><div class="modal-actions"><button class="btn" id="tipCancel">Abbrechen</button><button class="btn primary" id="tipCustomPay">Bezahlen</button></div></div></div></div>`;
+}
 
 function renderTerminal(){
   const cats = (state.payload.categories || []).filter(c => Number(c.enabled ?? 1) === 1);
@@ -131,16 +152,20 @@ function renderTerminal(){
     <section class="terminal-body"><div class="product-grid">${visible.map(p=>productCard(p)).join('') || '<p class="muted">Keine Produkte in dieser Kategorie.</p>'}</div></section>
     ${state.lastOrder ? lastOrderHtml() : ''}
     <section class="bottom-cart"><div class="cart-summary"><small>Warenkorb</small><div class="cart-items">${state.cart.length ? state.cart.map(i=>`${i.amount}x ${safe(i.label)}`).join(' · ') : '<span class="badge">Leer</span>'}</div></div><div class="total"><small>Gesamt</small><b>${money(cartTotal())}</b></div><div class="cart-actions"><button class="btn" id="clearCart">Leeren</button><button class="btn primary" id="payCard" ${(!state.cart.length||state.submittingOrder)?'disabled':''}>Karte zahlen</button><button class="btn" id="payCash" ${(!state.cart.length||state.submittingOrder)?'disabled':''}>Bar / Zettel</button></div></section>
-    ${state.modalProduct ? modalHtml(state.modalProduct) : ''}`;
+    ${state.modalProduct ? modalHtml(state.modalProduct) : ''}${tipModalHtml()}`;
   document.querySelectorAll('[data-cat]').forEach(b=>b.onclick=()=>{state.activeCategory=b.dataset.cat; renderTerminal();});
   document.querySelectorAll('[data-product]').forEach(b=>{ const p=[...products,...menus].find(x=>`${x.type}:${x.id}`===b.dataset.product); b.onclick=()=>openProduct(p); });
   document.getElementById('clearCart').onclick=()=>{state.cart=[]; renderTerminal();};
-  document.getElementById('payCard').onclick=()=>{ if(state.submittingOrder) return; state.submittingOrder=true; renderTerminal(); post('createOrder',{restaurantId:state.restaurantId,items:state.cart,paymentMethod:'card'}); };
-  document.getElementById('payCash').onclick=()=>{ if(state.submittingOrder) return; state.submittingOrder=true; renderTerminal(); post('createOrder',{restaurantId:state.restaurantId,items:state.cart,paymentMethod:'cash'}); };
+  document.getElementById('payCard').onclick=()=>{ if(state.submittingOrder) return; openTipModal('card'); };
+  document.getElementById('payCash').onclick=()=>{ if(state.submittingOrder) return; openTipModal('cash'); };
   const cancel=document.getElementById('modalCancel'); if(cancel) cancel.onclick=()=>{state.modalProduct=null; renderTerminal();};
   const add=document.getElementById('modalAdd'); if(add) add.onclick=()=>addToCart(state.modalProduct,state.modalQty);
   const plus=document.getElementById('qtyPlus'); if(plus) plus.onclick=()=>{state.modalQty++; renderTerminal();};
   const minus=document.getElementById('qtyMinus'); if(minus) minus.onclick=()=>{state.modalQty=Math.max(1,state.modalQty-1); renderTerminal();};
+  document.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>submitOrderWithTip(Number(b.dataset.tip || 0)));
+  const tipCancel=document.getElementById('tipCancel'); if(tipCancel) tipCancel.onclick=()=>{state.tipModal=null; renderTerminal();};
+  const customTip=document.getElementById('customTip'); if(customTip) customTip.oninput=()=>{ if(state.tipModal) state.tipModal.custom=customTip.value; const out=document.querySelector('.tip-total b'); if(out) out.textContent=money(cartTotal()+Math.max(0,Number(customTip.value||0))); };
+  const tipCustomPay=document.getElementById('tipCustomPay'); if(tipCustomPay) tipCustomPay.onclick=()=>submitOrderWithTip(Number((document.getElementById('customTip')||{}).value || 0));
 }
 function productCard(p){ return `<article class="product-card visual-card"><div class="product-image">${imgTag(p,p.label)}</div><div class="product-info"><h3>${safe(p.label)}</h3><b class="product-price">${money(p.price)}</b></div><button class="order-btn" data-product="${p.type||'product'}:${p.id}"><span>Bestellen</span></button></article>`; }
 function modalHtml(p){ return `<div class="modal-back"><div class="modal"><div class="modal-img">${imgTag(p,p.label)}</div><div class="modal-content"><h2>${safe(p.label)}</h2><div class="modal-row"><span class="price">${money(Number(p.price)*state.modalQty)}</span><div class="qty"><button id="qtyMinus">−</button><span>${state.modalQty}</span><button id="qtyPlus">+</button></div></div><div class="modal-actions"><button class="btn" id="modalCancel">Abbrechen</button><button class="btn primary" id="modalAdd">Hinzufügen</button></div></div></div></div>`; }
@@ -149,7 +174,8 @@ function lastOrderHtml(){
   const o = state.lastOrder || {}; const items = o.items || [];
   const paid = o.paid === true || o.paymentMethod === 'card' || o.paymentStatus === 'paid_card' || o.paymentStatus === 'paid';
   const title = paid ? 'Kassenbon' : 'Bestellzettel';
-  return `<section class="order-note receipt-preview"><b>${title} #${safe(o.orderNumber)}</b><p class="muted">${safe(o.restaurant || state.payload.restaurant || 'Restaurant')}</p><ul>${items.map(i=>`<li>${safe(i.amount)}x ${safe(i.label)} · ${money(Number(i.price)*Number(i.amount))}</li>`).join('') || '<li>Keine Positionen übertragen</li>'}</ul><div><b>Summe: ${money(o.total)}</b></div><p>${paid?'Mit Karte bezahlt. Deine Bestellung wurde an die Küche geschickt.':'Noch nicht bezahlt. Geh mit dem Zettel zur Kasse und nenne die Bestellnummer.'}</p></section>`;
+  const tip = Number(o.tipAmount || o.tip_amount || 0);
+  return `<section class="order-note receipt-preview"><b>${title} #${safe(o.orderNumber)}</b><p class="muted">${safe(o.restaurant || state.payload.restaurant || 'Restaurant')}</p><ul>${items.map(i=>`<li>${safe(i.amount)}x ${safe(i.label)} - ${money(Number(i.price)*Number(i.amount))}</li>`).join('') || '<li>Keine Positionen uebertragen</li>'}</ul>${tip>0?`<div>Trinkgeld: <b>${money(tip)}</b></div>`:''}<div><b>Summe: ${money(o.total)}</b></div><p>${paid?'Mit Karte bezahlt. Deine Bestellung wurde an die Kueche geschickt.':'Noch nicht bezahlt. Geh mit dem Zettel zur Kasse und nenne die Bestellnummer.'}</p></section>`;
 }
 
 
@@ -206,8 +232,11 @@ function renderManager(){
 function managerPanel(){ return state.managerTab==='categories'?categoryPanel():state.managerTab==='products'?productPanel():state.managerTab==='menus'?menuPanel():cashPanel(); }
 function paymentItemsHtml(row){
   let items=[]; try{items=JSON.parse(row.items_json||'[]')}catch(e){}
-  if(!items.length) return '<div class="payment-items muted">Keine Positionsdaten.</div>';
-  return '<div class="payment-items"><ul>'+items.map(i=>'<li><span>'+safe(i.amount||1)+'x '+safe(i.label||'Artikel')+'</span><b>'+money(Number(i.price||0)*Number(i.amount||1))+'</b></li>').join('')+'</ul></div>';
+  const tip = Number(row.tip_amount || 0);
+  const rows = items.map(i=>'<li><span>'+safe(i.amount||1)+'x '+safe(i.label||'Artikel')+'</span><b>'+money(Number(i.price||0)*Number(i.amount||1))+'</b></li>');
+  if(tip > 0) rows.push('<li class="tip-line"><span>Trinkgeld</span><b>'+money(tip)+'</b></li>');
+  if(!rows.length) return '<div class="payment-items muted">Keine Positionsdaten.</div>';
+  return '<div class="payment-items"><ul>'+rows.join('')+'</ul></div>';
 }
 function paymentCard(p){
   const isOpen = String(state.openPayment||'') === String(p.id);
@@ -218,7 +247,7 @@ function paymentCard(p){
 function cashPanel(){
   const stats=state.payload.cashStats||{today:0,open:0,total:0,cardToday:0,cardTotal:0,orders:[],cashiers:[],payments:[]};
   const orders=stats.orders||[], cashiers=stats.cashiers||[], payments=stats.payments||[];
-  return '<h2>Kasse</h2><div class="stats"><div><small>Heute bar</small><b>'+money(stats.today)+'</b></div><div><small>Offener Kassensturz</small><b>'+money(stats.open)+'</b></div><div><small>Heute Karte</small><b>'+money(stats.cardToday)+'</b></div><div><small>Gesamt Karte</small><b>'+money(stats.cardTotal)+'</b></div></div><h2>Kassensturz</h2><div class="cash-close-list">'+(cashiers.length?cashiers.map(c=>'<article class="cash-close-card"><div><b>'+safe(c.cashier_name||'Unbekannt')+'</b><span>'+Number(c.order_count||0)+' Zahlung(en) - '+fmtTime(c.first_paid_time)+' bis '+fmtTime(c.last_paid_time)+'</span></div><strong>'+money(c.total)+'</strong><button class="btn mini primary" data-closecash="'+safe(c.cashier_identifier||'')+'">Kassensturz abschliessen</button></article>').join(''):'<p class="muted">Keine offenen Bar-Einnahmen fuer einen Kassensturz.</p>')+'</div><h2>Buchungen</h2><div class="payment-list">'+(payments.length?payments.map(paymentCard).join(''):'<p class="muted">Noch keine Buchungen vorhanden.</p>')+'</div><h2>Letzte Barzahlungen</h2><table class="table"><tr><th>Bestellung</th><th>Betrag</th><th>Kassierer</th><th>Zeit</th><th>Status</th></tr>'+orders.map(o=>'<tr><td>#'+o.order_number+'</td><td>'+money(o.total)+'</td><td>'+safe(o.cashier_name||o.cashier_identifier||'-')+'</td><td>'+fmtTime(o.paid_time||o.paid_at||o.updated_at)+'</td><td>'+(o.cash_closed_at?'Abgeschlossen':'Offen')+'</td></tr>').join('')+'</table>';
+  return '<h2>Kasse</h2><div class="stats"><div><small>Heute bar</small><b>'+money(stats.today)+'</b></div><div><small>Offener Kassensturz</small><b>'+money(stats.open)+'</b></div><div><small>Heute Karte</small><b>'+money(stats.cardToday)+'</b></div><div><small>Trinkgeld heute</small><b>'+money(stats.tipToday)+'</b></div><div><small>Gesamt Trinkgeld</small><b>'+money(stats.tipTotal)+'</b></div></div><h2>Kassensturz</h2><div class="cash-close-list">'+(cashiers.length?cashiers.map(c=>'<article class="cash-close-card"><div><b>'+safe(c.cashier_name||'Unbekannt')+'</b><span>'+Number(c.order_count||0)+' Zahlung(en) - '+fmtTime(c.first_paid_time)+' bis '+fmtTime(c.last_paid_time)+'</span></div><strong>'+money(c.total)+'</strong><button class="btn mini primary" data-closecash="'+safe(c.cashier_identifier||'')+'">Kassensturz abschliessen</button></article>').join(''):'<p class="muted">Keine offenen Bar-Einnahmen fuer einen Kassensturz.</p>')+'</div><h2>Buchungen</h2><div class="payment-list">'+(payments.length?payments.map(paymentCard).join(''):'<p class="muted">Noch keine Buchungen vorhanden.</p>')+'</div><h2>Letzte Barzahlungen</h2><table class="table"><tr><th>Bestellung</th><th>Betrag</th><th>Trinkgeld</th><th>Kassierer</th><th>Zeit</th><th>Status</th></tr>'+orders.map(o=>'<tr><td>#'+o.order_number+'</td><td>'+money(o.total)+'</td><td>'+money(o.tip_amount)+'</td><td>'+safe(o.cashier_name||o.cashier_identifier||'-')+'</td><td>'+fmtTime(o.paid_time||o.paid_at||o.updated_at)+'</td><td>'+(o.cash_closed_at?'Abgeschlossen':'Offen')+'</td></tr>').join('')+'</table>';
 }
 function categoryPanel(){ const cats=state.payload.categories||[]; const e=state.editing||{}; return `<h2>Kategorien</h2><div class="form"><input id="catLabel" class="full" placeholder="Kategoriename" value="${safe(e.label || e.name)}"><input id="catImage" class="full" placeholder="Bild-URL" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="catImagePreview">${imgTag({image:e.image}, e.label||'Kategorie')}</div></div><input id="catSort" type="number" placeholder="Sortierung" value="${safe(e.sort_order||1)}"><select id="catEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><button class="btn primary" id="saveCat">Speichern</button></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Sort</th><th></th></tr>${cats.map(c=>{ const disabled=Number(c.enabled)===0; return `<tr class="${disabled?'is-disabled':''}"><td><div class="table-img">${imgTag(c,c.label)}</div></td><td>${safe(c.label)}</td><td>${c.sort_order}</td><td><button class="btn mini" data-editcat="${c.id}">Bearbeiten</button>${disabled?`<button class="btn mini" data-togglecat="${c.id}">Aktivieren</button><button class="btn mini danger" data-harddelcat="${c.id}">Endgültig löschen</button>`:`<button class="btn mini" data-delcat="${c.id}">Deaktivieren</button>`}</td></tr>`; }).join('')}</table>`; }
 function productPanel(){ const cats=state.payload.categories||[], products=state.payload.products||[], e=state.editing||{}; const isEdit=!!e.id; return `<div class="manager-headline"><div><h2>PRODUKTE</h2></div><button class="btn" id="newProd">+ Neues Produkt</button></div><div class="form"><select id="prodCat">${cats.map(c=>`<option value="${safe(c.name)}" ${e.category===c.name?'selected':''}>${safe(c.label)}</option>`).join('')}</select><input id="prodLabel" placeholder="Name" value="${safe(e.label)}"><input id="prodPrice" type="number" step="0.01" min="0" placeholder="Preis" value="${safe(e.price||'')}"><select id="prodEnabled"><option value="1">Aktiv</option><option value="0" ${Number(e.enabled)===0?'selected':''}>Inaktiv</option></select><input id="prodImage" class="full" placeholder="Bild-Link" value="${safe(e.image)}"><div class="image-help full"><div class="image-preview" id="prodImagePreview">${imgTag({image:e.image}, e.label||'Vorschau')}</div><div><input id="oxImageSearch" placeholder="Bild" value=""><small class="muted ox-hint">Mindestens 3 Anfangsbuchstaben eingeben, dann erscheinen Bilder aus dem Inventory.</small><div class="ox-suggestions" id="oxImageSuggestions"></div></div></div><div class="full form-actions"><button class="btn primary" id="saveProd">${isEdit?'Änderungen speichern':'Produkt hinzufügen'}</button>${isEdit?'<button class="btn" id="duplicateProd">Als neues Produkt kopieren</button><button class="btn" id="cancelProdEdit">Bearbeitung abbrechen</button>':''}</div></div><table class="table"><tr><th>Bild</th><th>Name</th><th>Preis</th><th></th></tr>${products.map(p=>{ const disabled=Number(p.enabled)===0; return `<tr class="${disabled?'is-disabled':''}"><td><div class="table-img">${imgTag(p,p.label)}</div></td><td>${safe(p.label)}</td><td>${money(p.price)}</td><td><button class="btn mini" data-editprod="${p.id}">Bearbeiten</button><button class="btn mini" data-toggleprod="${p.id}" data-enabled="${Number(p.enabled)?0:1}">${Number(p.enabled)?'Deaktivieren':'Aktivieren'}</button>${disabled?`<button class="btn mini danger" data-harddelprod="${p.id}">Endgültig löschen</button>`:''}</td></tr>`; }).join('')}</table>`; }
