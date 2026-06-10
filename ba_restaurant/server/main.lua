@@ -159,7 +159,7 @@ local function buildReceiptItemList(items)
     return normalizeReceiptItems(items)
 end
 
-local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, paperType, paymentText, paymentMethod, orderId)
+local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, paperType, paymentText, paymentMethod, orderId, tipAmount, subtotal)
     -- Zentrale Stelle für ox_inventory-Metadaten.
     -- Wichtig: Hier wird NICHT mehr aus irgendeinem alten Fallback geraten, sondern der übergebene paperType entscheidet eindeutig:
     --   note    = unbezahlter Bestellzettel
@@ -193,6 +193,10 @@ local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, p
     local restaurantName = sanitizeText(restaurantLabel, 128)
     if restaurantName == '' then restaurantName = 'Unbekanntes Restaurant' end
 
+    tipAmount = math.max(0, tonumber(tipAmount) or 0)
+    subtotal = tonumber(subtotal) or (tonumber(total or 0) - tipAmount)
+    if subtotal < 0 then subtotal = 0 end
+
     local title = isReceipt and ('Kassenbon #%s'):format(orderNumber) or ('Bestellzettel #%s'):format(orderNumber)
     local lines = formatOrderLines(receiptItems)
     local meta = {
@@ -209,6 +213,9 @@ local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, p
         restaurant = restaurantName,
         restaurant_name = restaurantName,
         total = tonumber(total or 0),
+        subtotal = subtotal,
+        tip_amount = tipAmount,
+        tip = tipAmount,
         currency = Config.Currency or '$',
         payment = statusText,
         payment_text = statusText,
@@ -262,13 +269,13 @@ local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, p
     end
 end
 
-local function giveOrderNote(src, orderNumber, restaurantLabel, total, items, orderId)
-    giveOrderPaper(src, orderNumber, restaurantLabel, total, items, 'note', 'Noch nicht bezahlt', 'cash', orderId)
+local function giveOrderNote(src, orderNumber, restaurantLabel, total, items, orderId, tipAmount, subtotal)
+    giveOrderPaper(src, orderNumber, restaurantLabel, total, items, 'note', 'Noch nicht bezahlt', 'cash', orderId, tipAmount, subtotal)
 end
 
-local function givePaidReceipt(src, orderNumber, restaurantLabel, total, items, paymentText, paymentMethod, orderId)
+local function givePaidReceipt(src, orderNumber, restaurantLabel, total, items, paymentText, paymentMethod, orderId, tipAmount, subtotal)
     paymentMethod = paymentMethod or (paymentText == 'Bar bezahlt' and 'cash' or 'card')
-    giveOrderPaper(src, orderNumber, restaurantLabel, total, items, 'receipt', paymentText, paymentMethod, orderId)
+    giveOrderPaper(src, orderNumber, restaurantLabel, total, items, 'receipt', paymentText, paymentMethod, orderId, tipAmount, subtotal)
 end
 
 local function getJobData(source)
@@ -474,6 +481,8 @@ local function ensureSchema()
       `status` varchar(32) NOT NULL DEFAULT 'open',
       `payment_method` varchar(32) NOT NULL DEFAULT 'card',
       `payment_status` varchar(32) NOT NULL DEFAULT 'pending',
+      `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00,
+      `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
       `total` decimal(10,2) NOT NULL DEFAULT 0.00,
       `items_json` longtext NOT NULL,
       `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -489,6 +498,7 @@ local function ensureSchema()
       `method` varchar(32) NOT NULL,
       `status` varchar(32) NOT NULL DEFAULT 'booked',
       `amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+      `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
       `society_account` varchar(128) DEFAULT NULL,
       `cashier_identifier` varchar(128) DEFAULT NULL,
       `cashier_name` varchar(128) DEFAULT NULL,
@@ -508,19 +518,22 @@ local function ensureSchema()
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN screen_size varchar(32) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_identifier varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_name varchar(128) DEFAULT NULL') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN subtotal decimal(10,2) NOT NULL DEFAULT 0.00') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN tip_amount decimal(10,2) NOT NULL DEFAULT 0.00') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN paid_at timestamp NULL DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cash_closed_at timestamp NULL DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cash_closed_by varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cash_closed_by_name varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurants ADD COLUMN theme_json longtext DEFAULT NULL') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_payments ADD COLUMN tip_amount decimal(10,2) NOT NULL DEFAULT 0.00') end)
 end
 
-local function logPayment(restaurantId, orderId, orderNumber, method, amount, societyAccount, cashierIdentifier, cashierName)
+local function logPayment(restaurantId, orderId, orderNumber, method, amount, societyAccount, cashierIdentifier, cashierName, tipAmount)
     MySQL.insert.await([[INSERT INTO ba_restaurant_payments
-        (restaurant_id, order_id, order_number, method, status, amount, society_account, cashier_identifier, cashier_name)
-        VALUES (?, ?, ?, ?, 'booked', ?, ?, ?, ?)]], {
+        (restaurant_id, order_id, order_number, method, status, amount, tip_amount, society_account, cashier_identifier, cashier_name)
+        VALUES (?, ?, ?, ?, 'booked', ?, ?, ?, ?, ?)]], {
         slug(restaurantId), tonumber(orderId), tonumber(orderNumber), sanitizeText(method, 32), tonumber(amount) or 0,
-        sanitizeText(societyAccount, 128), sanitizeText(cashierIdentifier, 128), sanitizeText(cashierName, 128)
+        math.max(0, tonumber(tipAmount) or 0), sanitizeText(societyAccount, 128), sanitizeText(cashierIdentifier, 128), sanitizeText(cashierName, 128)
     })
 end
 
@@ -728,7 +741,7 @@ callback('ba_restaurant:getMenu', function(_, cb, restaurantId)
     local categories = MySQL.query.await('SELECT id, name, label, icon, image, sort_order, enabled FROM ba_restaurant_categories WHERE restaurant_id = ? AND enabled = 1 ORDER BY sort_order ASC, id ASC', { restaurantId })
     local products = MySQL.query.await([[SELECT p.id, p.category, c.label AS category_label, p.label, p.description, p.price, p.item_name, p.image, p.enabled FROM ba_restaurant_products p LEFT JOIN ba_restaurant_categories c ON c.restaurant_id = p.restaurant_id AND c.name = p.category WHERE p.restaurant_id = ? AND p.enabled = 1 ORDER BY p.category ASC, p.id ASC]], { restaurantId })
     local menus = MySQL.query.await('SELECT * FROM ba_restaurant_menus WHERE restaurant_id = ? AND enabled = 1 ORDER BY id ASC', { restaurantId })
-    cb({ restaurant = restaurant.label, categories = categories or {}, products = products or {}, menus = menus or {}, currency = Config.Currency, theme = restaurant.theme })
+    cb({ restaurant = restaurant.label, categories = categories or {}, products = products or {}, menus = menus or {}, currency = Config.Currency, theme = restaurant.theme, tips = Config.Tips or { enabled = true, presets = { 10, 20, 30 } } })
 end)
 
 callback('ba_restaurant:getManagerData', function(source, cb, restaurantId)
@@ -744,16 +757,18 @@ callback('ba_restaurant:getManagerData', function(source, cb, restaurantId)
     local cashTotalAll = MySQL.scalar.await([[SELECT COALESCE(SUM(total),0) FROM ba_restaurant_orders WHERE restaurant_id = ? AND payment_method = 'cash' AND payment_status = 'paid_cash']], { restaurantId }) or 0
     local cardToday = MySQL.scalar.await([[SELECT COALESCE(SUM(amount),0) FROM ba_restaurant_payments WHERE restaurant_id = ? AND method = 'card' AND DATE(booked_at) = CURDATE()]], { restaurantId }) or 0
     local cardTotal = MySQL.scalar.await([[SELECT COALESCE(SUM(amount),0) FROM ba_restaurant_payments WHERE restaurant_id = ? AND method = 'card']], { restaurantId }) or 0
-    local paymentRows = MySQL.query.await([[SELECT p.id, p.order_id, p.order_number, p.method, p.amount, p.cashier_name,
+    local tipToday = MySQL.scalar.await([[SELECT COALESCE(SUM(tip_amount),0) FROM ba_restaurant_payments WHERE restaurant_id = ? AND DATE(booked_at) = CURDATE()]], { restaurantId }) or 0
+    local tipTotal = MySQL.scalar.await([[SELECT COALESCE(SUM(tip_amount),0) FROM ba_restaurant_payments WHERE restaurant_id = ?]], { restaurantId }) or 0
+    local paymentRows = MySQL.query.await([[SELECT p.id, p.order_id, p.order_number, p.method, p.amount, p.tip_amount, p.cashier_name,
         DATE_FORMAT(p.booked_at, '%d.%m.%Y %H:%i') AS booked_time,
-        o.items_json, o.status AS order_status, o.payment_status
+        o.items_json, o.subtotal, o.status AS order_status, o.payment_status
         FROM ba_restaurant_payments p
         LEFT JOIN ba_restaurant_orders o ON o.id = p.order_id AND o.restaurant_id = p.restaurant_id
         WHERE p.restaurant_id = ?
         ORDER BY p.booked_at DESC LIMIT ?]], { restaurantId, Config.CashStatsLimit or 50 }) or {}
     local cashiers = MySQL.query.await([[SELECT cashier_identifier, COALESCE(NULLIF(cashier_name,''), cashier_identifier, 'Unbekannt') AS cashier_name, COUNT(*) AS order_count, COALESCE(SUM(total),0) AS total, MIN(COALESCE(paid_at, updated_at)) AS first_paid_at, MAX(COALESCE(paid_at, updated_at)) AS last_paid_at, DATE_FORMAT(MIN(COALESCE(paid_at, updated_at)), '%d.%m.%Y %H:%i') AS first_paid_time, DATE_FORMAT(MAX(COALESCE(paid_at, updated_at)), '%d.%m.%Y %H:%i') AS last_paid_time FROM ba_restaurant_orders WHERE restaurant_id = ? AND payment_method = 'cash' AND payment_status = 'paid_cash' AND cash_closed_at IS NULL GROUP BY cashier_identifier, cashier_name ORDER BY last_paid_at DESC]], { restaurantId }) or {}
-    local cashOrders = MySQL.query.await([[SELECT id, order_number, total, cashier_identifier, COALESCE(NULLIF(cashier_name,''), cashier_identifier, '-') AS cashier_name, paid_at, updated_at, DATE_FORMAT(COALESCE(paid_at, updated_at), '%d.%m.%Y %H:%i') AS paid_time, items_json, cash_closed_at FROM ba_restaurant_orders WHERE restaurant_id = ? AND payment_method = 'cash' AND payment_status = 'paid_cash' ORDER BY COALESCE(paid_at, updated_at) DESC LIMIT ?]], { restaurantId, Config.CashStatsLimit or 50 })
-    cb({ ok = true, categories = categories or {}, products = products or {}, menus = menus or {}, cashStats = { today = cashTotalToday, open = cashTotalOpen, total = cashTotalAll, cardToday = cardToday, cardTotal = cardTotal, cashiers = cashiers, orders = cashOrders or {}, payments = paymentRows }, currency = Config.Currency, restaurant = restaurant.label, theme = restaurant.theme })
+    local cashOrders = MySQL.query.await([[SELECT id, order_number, subtotal, tip_amount, total, cashier_identifier, COALESCE(NULLIF(cashier_name,''), cashier_identifier, '-') AS cashier_name, paid_at, updated_at, DATE_FORMAT(COALESCE(paid_at, updated_at), '%d.%m.%Y %H:%i') AS paid_time, items_json, cash_closed_at FROM ba_restaurant_orders WHERE restaurant_id = ? AND payment_method = 'cash' AND payment_status = 'paid_cash' ORDER BY COALESCE(paid_at, updated_at) DESC LIMIT ?]], { restaurantId, Config.CashStatsLimit or 50 })
+    cb({ ok = true, categories = categories or {}, products = products or {}, menus = menus or {}, cashStats = { today = cashTotalToday, open = cashTotalOpen, total = cashTotalAll, cardToday = cardToday, cardTotal = cardTotal, tipToday = tipToday, tipTotal = tipTotal, cashiers = cashiers, orders = cashOrders or {}, payments = paymentRows }, currency = Config.Currency, restaurant = restaurant.label, theme = restaurant.theme })
 end)
 
 RegisterNetEvent('ba_restaurant:createOrder', function(data)
@@ -762,28 +777,37 @@ RegisterNetEvent('ba_restaurant:createOrder', function(data)
     local restaurantId = slug(data.restaurantId)
     local restaurant = getRestaurant(restaurantId)
     if not restaurant then return end
-    local total, sanitizedItems = 0.0, {}
+    local subtotal, sanitizedItems = 0.0, {}
     for _, item in ipairs(data.items) do
         local amount = tonumber(item.amount) or 0
         if amount > 0 and amount <= 50 then
             if item.type == 'menu' then
                 local menu = MySQL.single.await('SELECT id, label, price, products_json FROM ba_restaurant_menus WHERE id = ? AND restaurant_id = ? AND enabled = 1', { item.id, restaurantId })
                 if menu then
-                    total = total + (tonumber(menu.price) * amount)
+                    subtotal = subtotal + (tonumber(menu.price) * amount)
                     sanitizedItems[#sanitizedItems + 1] = { menu_id = menu.id, label = menu.label, price = tonumber(menu.price), amount = amount, products = menu.products_json }
                 end
             else
                 local product = MySQL.single.await('SELECT id, label, price, item_name FROM ba_restaurant_products WHERE id = ? AND restaurant_id = ? AND enabled = 1', { item.id, restaurantId })
                 if product then
-                    total = total + (tonumber(product.price) * amount)
+                    subtotal = subtotal + (tonumber(product.price) * amount)
                     sanitizedItems[#sanitizedItems + 1] = { product_id = product.id, label = product.label, price = tonumber(product.price), amount = amount, item_name = product.item_name }
                 end
             end
         end
     end
     if #sanitizedItems == 0 then notify(src, 'Dein Warenkorb ist leer.', 'error'); TriggerClientEvent('ba_restaurant:orderFailed', src); return end
+    local tipAmount = 0.0
+    if Config.Tips == nil or Config.Tips.enabled ~= false then
+        tipAmount = tonumber(data.tipAmount or data.tip_amount or data.tip) or 0.0
+        if tipAmount < 0 then tipAmount = 0.0 end
+        local maxTip = tonumber((Config.Tips or {}).maxAmount) or 1000.0
+        if tipAmount > maxTip then tipAmount = maxTip end
+    end
+    tipAmount = math.floor((tipAmount + 0.005) * 100) / 100
+    local total = math.floor((subtotal + tipAmount + 0.005) * 100) / 100
     if Config.Debug then
-        print(('[ba_restaurant] createOrder restaurant=%s requestedPayment=%s items=%s total=%.2f'):format(tostring(restaurantId), tostring(data.paymentMethod or data.payment_method or data.method or data.payment), tostring(#sanitizedItems), tonumber(total or 0)))
+        print(('[ba_restaurant] createOrder restaurant=%s requestedPayment=%s items=%s subtotal=%.2f tip=%.2f total=%.2f'):format(tostring(restaurantId), tostring(data.paymentMethod or data.payment_method or data.method or data.payment), tostring(#sanitizedItems), tonumber(subtotal or 0), tonumber(tipAmount or 0), tonumber(total or 0)))
     end
     local requestedPayment = tostring(data.paymentMethod or data.payment_method or data.method or data.payment or data.payType or data.paymentType or Config.DefaultPaymentMethod or 'card'):lower()
     local paymentMethod = requestedPayment == 'cash' and 'cash' or 'card'
@@ -805,25 +829,25 @@ RegisterNetEvent('ba_restaurant:createOrder', function(data)
         end
     end
     local nextNumber = MySQL.scalar.await('SELECT COALESCE(MAX(order_number), 0) + 1 FROM ba_restaurant_orders WHERE restaurant_id = ?', { restaurantId }) or 1
-    local orderId = MySQL.insert.await('INSERT INTO ba_restaurant_orders (restaurant_id, order_number, customer_identifier, status, payment_method, payment_status, total, items_json, paid_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', {
-        restaurantId, nextNumber, getIdentifier(src), paymentMethod == 'cash' and 'awaiting_payment' or 'open', paymentMethod, paymentStatus, total, json.encode(sanitizedItems), paymentMethod == 'card' and os.date('%Y-%m-%d %H:%M:%S') or nil
+    local orderId = MySQL.insert.await('INSERT INTO ba_restaurant_orders (restaurant_id, order_number, customer_identifier, status, payment_method, payment_status, subtotal, tip_amount, total, items_json, paid_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', {
+        restaurantId, nextNumber, getIdentifier(src), paymentMethod == 'cash' and 'awaiting_payment' or 'open', paymentMethod, paymentStatus, subtotal, tipAmount, total, json.encode(sanitizedItems), paymentMethod == 'card' and os.date('%Y-%m-%d %H:%M:%S') or nil
     })
     if paymentMethod == 'cash' then
-        giveOrderNote(src, nextNumber, restaurant.label, total, sanitizedItems, orderId)
+        giveOrderNote(src, nextNumber, restaurant.label, total, sanitizedItems, orderId, tipAmount, subtotal)
     else
         if xPlayer and xPlayer.removeAccountMoney then
             xPlayer.removeAccountMoney('bank', total)
         end
         if societyAccount then
             societyAccount.addMoney(total)
-            logPayment(restaurantId, orderId, nextNumber, 'card', total, societyAccountName, getIdentifier(src), getCharacterName(src))
+            logPayment(restaurantId, orderId, nextNumber, 'card', total, societyAccountName, getIdentifier(src), getCharacterName(src), tipAmount)
             if Config.Debug then
                 print(('[ba_restaurant] Kartenzahlung %.2f auf Fraktionskonto %s gebucht.'):format(tonumber(total or 0), tostring(societyAccountName)))
             end
         end
-        givePaidReceipt(src, nextNumber, restaurant.label, total, sanitizedItems, 'Mit Karte bezahlt', 'card', orderId)
+        givePaidReceipt(src, nextNumber, restaurant.label, total, sanitizedItems, 'Mit Karte bezahlt', 'card', orderId, tipAmount, subtotal)
     end
-    TriggerClientEvent('ba_restaurant:orderCreated', src, { orderId = orderId, orderNumber = nextNumber, restaurant = restaurant.label, paymentMethod = paymentMethod, paymentStatus = paymentStatus, paid = paymentMethod == 'card', total = total, items = sanitizedItems })
+    TriggerClientEvent('ba_restaurant:orderCreated', src, { orderId = orderId, orderNumber = nextNumber, restaurant = restaurant.label, paymentMethod = paymentMethod, paymentStatus = paymentStatus, paid = paymentMethod == 'card', subtotal = subtotal, tipAmount = tipAmount, tip_amount = tipAmount, total = total, items = sanitizedItems })
     TriggerClientEvent('ba_restaurant:kitchenRefresh', -1, restaurantId)
     TriggerClientEvent('ba_restaurant:pickupRefresh', -1, restaurantId)
 end)
@@ -885,8 +909,8 @@ RegisterNetEvent('ba_restaurant:cashierPayment', function(data)
         local restaurant = getRestaurant(restaurantId)
         local items = {}
         pcall(function() items = json.decode(order.items_json or '[]') or {} end)
-        logPayment(restaurantId, order.id, order.order_number, 'cash', order.total, nil, getIdentifier(src), getCharacterName(src))
-        givePaidReceipt(src, order.order_number, restaurant and restaurant.label or restaurantId, order.total, items, 'Bar bezahlt', 'cash', order.id)
+        logPayment(restaurantId, order.id, order.order_number, 'cash', order.total, nil, getIdentifier(src), getCharacterName(src), order.tip_amount)
+        givePaidReceipt(src, order.order_number, restaurant and restaurant.label or restaurantId, order.total, items, 'Bar bezahlt', 'cash', order.id, order.tip_amount, order.subtotal)
         notify(src, 'Barzahlung vermerkt. Kassenbon wurde erstellt und die Bestellung an die Küche freigegeben.', 'success')
         TriggerClientEvent('ba_restaurant:kitchenRefresh', -1, restaurantId)
         TriggerClientEvent('ba_restaurant:pickupRefresh', -1, restaurantId)

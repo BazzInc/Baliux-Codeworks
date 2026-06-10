@@ -376,6 +376,45 @@ local monitorLastFetch = 0
 local monitorLastDuiPayload = {}
 local monitorLastDuiSent = {}
 local monitorFetchSerial = {}
+local monitorSoundState = {}
+
+local function monitorSoundEnabled(group)
+    local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
+    return cfg and cfg.enabled == true
+end
+
+local function playMonitorSound(group)
+    local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
+    if not cfg or cfg.enabled ~= true then return end
+    PlaySoundFrontend(-1, cfg.soundName or 'CHECKPOINT_NORMAL', cfg.soundSet or 'HUD_MINI_GAME_SOUNDSET', true)
+end
+
+local function indexOrders(orders, onlyReady)
+    local out = {}
+    for _, order in ipairs(orders or {}) do
+        if not onlyReady or order.status == 'ready' then
+            out[tostring(order.id or order.order_number)] = true
+        end
+    end
+    return out
+end
+
+local function hasNewOrder(previous, current)
+    if not previous then return false end
+    for id in pairs(current or {}) do
+        if not previous[id] then return true end
+    end
+    return false
+end
+
+local function handleMonitorSounds(restaurantId, result)
+    local state = monitorSoundState[restaurantId] or {}
+    local kitchenNow = indexOrders(result and result.kitchen or {}, false)
+    local pickupReadyNow = indexOrders(result and result.pickup or {}, true)
+    if monitorSoundEnabled('kitchen') and hasNewOrder(state.kitchen, kitchenNow) then playMonitorSound('kitchen') end
+    if monitorSoundEnabled('pickup') and hasNewOrder(state.pickupReady, pickupReadyNow) then playMonitorSound('pickup') end
+    monitorSoundState[restaurantId] = { kitchen = kitchenNow, pickupReady = pickupReadyNow }
+end
 
 local function parseItems(itemsJson)
     local ok, items = pcall(function() return json.decode(itemsJson or '[]') end)
@@ -542,6 +581,7 @@ refreshMonitorOrders = function(force)
             local fetchSerial = monitorFetchSerial[restaurantId]
             serverCallback('ba_restaurant:getMonitorOrders', function(result)
                 if monitorFetchSerial[restaurantId] ~= fetchSerial then return end
+                handleMonitorSounds(restaurantId, result or { kitchen = {}, pickup = {} })
                 monitorOrderCache[restaurantId] = result or { kitchen = {}, pickup = {} }
             end, restaurantId)
         end

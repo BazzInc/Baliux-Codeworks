@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS `ba_restaurant_orders` (
   `status` varchar(32) NOT NULL DEFAULT 'open',
   `payment_method` varchar(32) NOT NULL DEFAULT 'card',
   `payment_status` varchar(32) NOT NULL DEFAULT 'pending',
+  `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
   `total` decimal(10,2) NOT NULL DEFAULT 0.00,
   `items_json` longtext NOT NULL,
   `cashier_identifier` varchar(128) DEFAULT NULL,
@@ -105,6 +107,7 @@ CREATE TABLE IF NOT EXISTS `ba_restaurant_payments` (
   `method` varchar(32) NOT NULL,
   `status` varchar(32) NOT NULL DEFAULT 'booked',
   `amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
   `society_account` varchar(128) DEFAULT NULL,
   `cashier_identifier` varchar(128) DEFAULT NULL,
   `cashier_name` varchar(128) DEFAULT NULL,
@@ -120,10 +123,13 @@ ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `prop_model` varchar
 ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `screen_size` varchar(32) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cashier_identifier` varchar(128) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cashier_name` varchar(128) DEFAULT NULL;
+ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00;
+ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `paid_at` timestamp NULL DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cash_closed_at` timestamp NULL DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cash_closed_by` varchar(128) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cash_closed_by_name` varchar(128) DEFAULT NULL;
+ALTER TABLE `ba_restaurant_payments` ADD COLUMN IF NOT EXISTS `tip_amount` decimal(10,2) NOT NULL DEFAULT 0.00;
 
 INSERT INTO `ba_restaurants` (`id`, `label`, `job`, `society_account`, `theme_json`, `enabled`) VALUES
 ('burgershot', 'Burger Shot', 'burgershot', 'society_burgershot', '{"primary":"#ff6a3d","accent":"#31d3c5","background":"#151018"}', 1),
