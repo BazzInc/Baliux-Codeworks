@@ -4,7 +4,7 @@ game 'gta5'
 name 'ba_restaurant'
 author 'Baliux Codeworks'
 description 'Restaurant Creator'
-version '1.1.4'
+version '1.1.1'
 
 lua54 'yes'
 
@@ -27,7 +27,8 @@ server_scripts {
 files {
     'html/index.html',
     'html/css/style.css',
-    'html/js/app.js'
+    'html/js/app.js',
+    'html/sounds/*.wav'
 }
 
 dependency 'ba_core'

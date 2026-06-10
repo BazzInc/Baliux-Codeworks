@@ -53,6 +53,12 @@ function imagePath(item) { const raw = (typeof item === 'string' ? item : (item?
 function imgTag(item, alt) { const src = imagePath(item); return src ? `<img src="${safe(src)}" alt="${safe(alt)}" onerror="this.outerHTML='<div class=no-img>🍔</div>'">` : '<div class="no-img">🍔</div>'; }
 function iconForCategory(name,label){ const t=(name+' '+label).toLowerCase(); if(t.includes('drink')||t.includes('geträn')) return '🥤'; if(t.includes('beilage')||t.includes('pommes')) return '🍟'; if(t.includes('menu')||t.includes('menü')) return '🍱'; return '🍔'; }
 function catTabContent(c){ const img=imagePath(c); return img ? `<span class="cat-tab-img"><img src="${safe(img)}" onerror="this.parentNode.innerHTML='${safe(iconForCategory(c.name,c.label))}'"></span> ${safe(c.label)}` : `${safe(c.icon || iconForCategory(c.name, c.label))} ${safe(c.label)}`; }
+function playUiSound(file, volume){
+  if(!file) return;
+  const audio = new Audio(file.startsWith('html/') ? file.slice(5) : file);
+  audio.volume = Math.max(0, Math.min(1, Number(volume ?? 0.8)));
+  audio.play().catch(()=>{});
+}
 
 if (closeBtn) closeBtn.onclick = () => { closeUi(); post('close'); };
 if (isTvDisplay && closeBtn) closeBtn.style.display = 'none';
@@ -98,6 +104,7 @@ if (isTvDisplay) {
 
 window.addEventListener('message', (event) => {
   const data = event.data || {};
+  if (data.action === 'playMonitorSound') { playUiSound(data.file, data.volume); return; }
   if (data.action === 'tvDisplay') { applyTheme((data.payload || {}).theme); renderTvDisplay(data.payload || {}); return; }
   if (data.action === 'forceClose') { closeUi(); return; }
   if (data.action === 'open') { state.view = data.view; state.restaurantId = data.restaurantId; state.payload = data.payload || {}; applyTheme(activeTheme()); state.cart = []; state.activeCategory = null; state.modalProduct = null; state.tipModal = null; state.managerTab = 'categories'; state.editing = null; state.submittingOrder = false; app.classList.remove('hidden'); document.body.classList.add('menu-open'); render(); }
@@ -314,8 +321,8 @@ function adminPanel(e, active, types){
   const rid = e.id || active.id || '';
   const pointsHtml = active && active.id ? types.map(t=>{
     const points = (active.points && active.points[t]) || [];
-    const monitorControls = (t==='kitchen'||t==='pickup') ? '<select class="monitor-size"><option value="large">Bildschirm: gross</option><option value="small">Bildschirm: klein</option></select><button class="btn mini" data-placetv="'+t+'">TV platzieren</button>' : '';
-    return '<div class="point-box"><div><b>'+pointLabel(t)+'</b></div>'+monitorControls+'<button class="btn mini primary" data-setpoint="'+t+'">Hier setzen</button>'+points.map(p=>'<div class="point-row"><span>#'+p.id+' - '+safe(p.screen_size||'standard')+' - '+Number(p.x).toFixed(2)+', '+Number(p.y).toFixed(2)+', '+Number(p.z).toFixed(2)+'</span><button class="btn mini" data-delpoint="'+p.id+'">Entfernen</button></div>').join('')+'</div>';
+    const monitorControls = (t==='kitchen'||t==='pickup') ? '<div class="monitor-options"><select class="monitor-size"><option value="large">Bildschirm: gross</option><option value="small">Bildschirm: klein</option></select><select class="monitor-sound"><option value="1">Ton an</option><option value="0">Ton aus</option></select><input class="monitor-range" type="number" min="1" step="1" value="18" placeholder="Reichweite"><button class="btn mini" data-placetv="'+t+'">TV platzieren</button></div>' : '';
+    return '<div class="point-box"><div><b>'+pointLabel(t)+'</b></div>'+monitorControls+'<button class="btn mini primary" data-setpoint="'+t+'">Hier setzen</button>'+points.map(p=>'<div class="point-row"><span>#'+p.id+' - '+safe(p.screen_size||'standard')+' - Ton '+(Number(p.sound_enabled??1)?'an':'aus')+' / '+safe(p.sound_range||18)+'m - '+Number(p.x).toFixed(2)+', '+Number(p.y).toFixed(2)+', '+Number(p.z).toFixed(2)+'</span><button class="btn mini" data-delpoint="'+p.id+'">Entfernen</button></div>').join('')+'</div>';
   }).join('') : '<p class="muted">Speichere den Laden zuerst, dann kannst du Punkte setzen.</p>';
   const disabled = active && active.id && Number(active.enabled??1)===0;
   return '<div class="manager-headline"><div><h2>'+(isNew?'Neuen Laden erstellen':'Laden bearbeiten')+(disabled?' - deaktiviert':'')+'</h2></div>'+((active&&active.id&&Number(active.enabled??1)!==0)?'<button class="btn" id="openManagerForRestaurant">Produkte/Kategorien oeffnen</button>':'')+'</div><div class="form"><input id="adminId" placeholder="Interne ID z.B. burgershot" value="'+safe(rid)+'" '+(isNew?'':'readonly')+'><input id="adminLabel" placeholder="Anzeigename z.B. Burger Shot" value="'+safe(e.label||'')+'"><input id="adminJob" placeholder="Jobname z.B. burgershot" value="'+safe(e.job||'')+'"><input id="adminSociety" placeholder="Society-Konto, leer = society_jobname" value="'+safe(e.societyAccount||e.society_account||'')+'"><button class="btn primary full" id="saveRestaurant">'+(disabled?'Laden reaktivieren / speichern':'Laden speichern')+'</button>'+((active&&active.id&&Number(active.enabled??1)!==0)?'<button class="btn full" id="deleteRestaurant">Laden deaktivieren</button>':'')+(disabled?'<button class="btn danger full" id="hardDeleteRestaurant">Endgueltig loeschen</button>':'')+'</div><h2>Punkte setzen</h2><div class="point-grid">'+pointsHtml+'</div>';
@@ -337,7 +344,7 @@ function bindAdmin(){
   (document.getElementById('deleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('deleteRestaurant',{restaurantId:state.adminRestaurant}); };
   (document.getElementById('hardDeleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) openConfirm('Laden loeschen', 'Produkte, Punkte, Menues, Bestellungen und Buchungen werden endgueltig entfernt.', 'hardDeleteRestaurant', {restaurantId:state.adminRestaurant,confirm:true}); };
   (document.getElementById('openManagerForRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('openRestaurantManager',{restaurantId:state.adminRestaurant}); };
-  document.querySelectorAll('[data-setpoint]').forEach(b=>b.onclick=()=>{ const size=b.closest('.point-box')?.querySelector('.monitor-size')?.value; if(state.adminRestaurant) post('setPointHere',{restaurantId:state.adminRestaurant,pointType:b.dataset.setpoint,screenSize:size}); });
-  document.querySelectorAll('[data-placetv]').forEach(b=>b.onclick=()=>{ const size=b.closest('.point-box')?.querySelector('.monitor-size')?.value || 'large'; if(state.adminRestaurant) post('placeMonitorTv',{restaurantId:state.adminRestaurant,pointType:b.dataset.placetv,screenSize:size}); });
+  document.querySelectorAll('[data-setpoint]').forEach(b=>b.onclick=()=>{ const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); if(state.adminRestaurant) post('setPointHere',{restaurantId:state.adminRestaurant,pointType:b.dataset.setpoint,screenSize:size,soundEnabled:sound,soundRange:range}); });
+  document.querySelectorAll('[data-placetv]').forEach(b=>b.onclick=()=>{ const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value || 'large'; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); if(state.adminRestaurant) post('placeMonitorTv',{restaurantId:state.adminRestaurant,pointType:b.dataset.placetv,screenSize:size,soundEnabled:sound,soundRange:range}); });
   document.querySelectorAll('[data-delpoint]').forEach(b=>b.onclick=()=>post('deletePoint',{id:Number(b.dataset.delpoint)}));
 }
