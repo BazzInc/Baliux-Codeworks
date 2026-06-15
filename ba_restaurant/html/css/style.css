@@ -47,10 +47,11 @@ body{font-family:"Arial Narrow","Bahnschrift Condensed","Roboto Condensed","Barl
 
 .admin-creator .side .btn small { display:block; opacity:.65; font-size:11px; margin-top:3px; }
 .point-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin-top:14px; }
-.point-box { border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:14px; background:rgba(255,255,255,.04); }
+.point-box { border:1px solid rgba(255,255,255,.12); border-radius:16px; padding:14px; background:rgba(255,255,255,.04); min-width:0; }
 .point-box b { display:block; margin-bottom:3px; }
-.point-row { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,.08); font-size:12px; color:rgba(255,255,255,.82); }
-.point-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.point-row { display:grid; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid rgba(255,255,255,.08); font-size:12px; color:rgba(255,255,255,.82); min-width:0; }
+.point-row-head { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; min-width:0; }
+.point-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 
 .cashier-search{margin-bottom:18px;padding:14px;border:1px solid rgba(255,142,48,.45);border-radius:14px;background:rgba(0,0,0,.25)}
 .cashier-search input{font-size:24px;font-weight:800;letter-spacing:.08em}
@@ -234,8 +235,12 @@ body:not(.tv-display){background:transparent!important}
 .confirm-modal{width:460px}.confirm-modal p{margin:0 0 22px;color:#d9cec5;line-height:1.45}.confirm-modal .modal-actions{grid-template-columns:1fr 1fr}
 .tip-modal{width:500px}.tip-modal p{margin:0 0 18px}.tip-options{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}.tip-options .btn{padding:12px 10px}.tip-custom{display:grid;gap:7px;color:#ffcfaa;font-weight:800;margin-bottom:14px}.tip-total{display:flex;align-items:center;justify-content:space-between;border-top:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);padding:12px 0;margin-bottom:16px}.tip-total b{font-size:28px;color:var(--theme-accent)}
 .side .is-disabled{opacity:.58;border-style:dashed}
-.monitor-size{margin:8px 8px 8px 0;width:auto;min-width:160px}
-.monitor-options{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0}.monitor-options select,.monitor-options input{width:auto;min-width:120px}.monitor-options .monitor-range{max-width:120px}
+.monitor-options,.point-sound-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 8px;width:100%;min-width:0}
+.monitor-options label,.point-sound-row label{display:grid;gap:4px;min-width:0;color:#cfc7bf;font-size:11px;font-weight:800;text-transform:uppercase}
+.monitor-options label span,.point-sound-row label span{opacity:.72}
+.monitor-options select,.monitor-options input,.point-sound-row select,.point-sound-row input{width:100%;min-width:0;height:44px}
+.monitor-options .btn,.point-sound-row .btn{width:100%;min-width:0;padding:11px 10px}
+.point-sound-row{padding:8px;border:1px solid rgba(var(--theme-primary-rgb),.18);border-radius:10px;background:rgba(0,0,0,.18)}
 .payment-list{display:grid;gap:10px;margin:10px 0 18px}
 .payment-card{border:1px solid rgba(var(--theme-primary-rgb),.20);border-radius:12px;background:rgba(255,255,255,.035);padding:12px;cursor:pointer}
 .payment-card:hover{border-color:rgba(var(--theme-accent-rgb),.50);background:rgba(var(--theme-accent-rgb),.07)}

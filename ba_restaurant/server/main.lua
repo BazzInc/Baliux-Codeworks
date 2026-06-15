@@ -1,6 +1,7 @@
 local Framework = BA.Framework.Detect()
 local ESX = Framework.name == 'esx' and Framework.object or nil
 local Restaurants = {}
+local getCharacterName
 
 local function refreshFramework()
     Framework = BA.Framework.Detect()
@@ -49,6 +50,59 @@ local function notify(src, msg, ntype)
     TriggerClientEvent('ba_restaurant:notify', src, msg, ntype or 'info')
 end
 
+local function formatMoney(amount)
+    return ('%s%.2f'):format(Config.Currency or '$', tonumber(amount or 0) or 0)
+end
+
+local function webhookEnabled(event)
+    local cfg = Config.Webhooks or {}
+    if cfg.enabled ~= true then return false end
+    local events = cfg.events or {}
+    if events[event] == false then return false end
+    return true
+end
+
+local function getWebhookUrl(event)
+    local cfg = Config.Webhooks or {}
+    local urls = cfg.urls or {}
+    return sanitizeText(urls[event] or urls.support or cfg.url, 512)
+end
+
+local function supportLog(event, title, description, fields, color)
+    if not webhookEnabled(event) then return end
+    local url = getWebhookUrl(event)
+    if url == '' then return end
+
+    local embedFields = {}
+    for _, field in ipairs(fields or {}) do
+        local name = sanitizeText(field.name, 256)
+        local value = sanitizeText(field.value, 1024)
+        if name ~= '' and value ~= '' then
+            embedFields[#embedFields + 1] = {
+                name = name,
+                value = value,
+                inline = field.inline ~= false
+            }
+        end
+    end
+
+    local payload = {
+        username = sanitizeText((Config.Webhooks or {}).username or 'BA Restaurant', 80),
+        embeds = {{
+            title = sanitizeText(title, 256),
+            description = sanitizeText(description, 2048),
+            color = tonumber(color) or 16737792,
+            fields = embedFields,
+            footer = { text = os.date('%d.%m.%Y %H:%M:%S') }
+        }}
+    }
+
+    local avatar = sanitizeText((Config.Webhooks or {}).avatar, 512)
+    if avatar ~= '' then payload.avatar_url = avatar end
+
+    PerformHttpRequest(url, function() end, 'POST', json.encode(payload), { ['Content-Type'] = 'application/json' })
+end
+
 local function callback(name, cb)
     RegisterNetEvent(name, function(requestId, ...)
         local src = source
@@ -72,7 +126,29 @@ local function getIdentifier(source)
     return ('source:' .. source)
 end
 
-local function getCharacterName(source)
+local function getPlayerCfxIdentifier(source)
+    local fallback = ('source:%s'):format(tostring(source))
+    if not source or source == 0 then return 'Konsole' end
+    for i = 0, GetNumPlayerIdentifiers(source) - 1 do
+        local identifier = GetPlayerIdentifier(source, i)
+        if identifier and identifier:find('^fivem:') then return identifier:gsub('^fivem:', '') end
+    end
+    for i = 0, GetNumPlayerIdentifiers(source) - 1 do
+        local identifier = GetPlayerIdentifier(source, i)
+        if identifier and identifier:find('^license:') then return identifier end
+    end
+    return fallback
+end
+
+local function actorLogFields(source, label)
+    label = sanitizeText(label or 'Ausgefuehrt von', 64)
+    return {
+        { name = label, value = getCharacterName(source) },
+        { name = 'CFX Nummer', value = getPlayerCfxIdentifier(source) }
+    }
+end
+
+function getCharacterName(source)
     refreshFramework()
     if ESX then
         local xPlayer = ESX.GetPlayerFromId(source)
@@ -246,17 +322,16 @@ local function giveOrderPaper(src, orderNumber, restaurantLabel, total, items, p
         meta['item_' .. i .. '_total'] = entry.total
     end
 
-    if Config.Debug then
-        print(('[ba_restaurant] givePaper type=%s item=%s order=%s status=%s method=%s receipt=%s positions=%s total=%.2f restaurant=%s'):format(tostring(paperType), tostring(itemName), tostring(orderNumber), tostring(statusCode), tostring(method), tostring(isReceipt), tostring(#receiptItems), tonumber(total or 0), tostring(restaurantName)))
-    end
-
     if GetResourceState('ox_inventory') == 'started' then
         local ok, err = exports.ox_inventory:AddItem(src, itemName, 1, meta)
         if not ok then
-            print(('[ba_restaurant] ox_inventory AddItem fehlgeschlagen (%s): %s'):format(tostring(itemName), tostring(err)))
+            supportLog('errors', 'Inventar-Ausgabe fehlgeschlagen', 'Ein Bestellzettel oder Kassenbon konnte nicht ins Inventar gelegt werden.', {
+                { name = 'Restaurant', value = restaurantName },
+                { name = 'Bestellung', value = '#' .. tostring(orderNumber) },
+                { name = 'Item', value = tostring(itemName) },
+                { name = 'Fehler', value = tostring(err), inline = false }
+            }, 15158332)
             notify(src, ('%s konnte nicht ins Inventar gelegt werden.'):format(isReceipt and 'Kassenbon' or 'Bestellzettel'), 'error')
-        elseif Config.Debug then
-            print(('[ba_restaurant] %s an Spieler %s gegeben: order=%s item=%s'):format(isReceipt and 'Kassenbon' or 'Bestellzettel', tostring(src), tostring(orderNumber), tostring(itemName)))
         end
         return
     end
@@ -305,13 +380,17 @@ local function getSqlSocietyAccount(accountName)
         MySQL.insert.await('INSERT IGNORE INTO addon_account (name, label, shared) VALUES (?, ?, 1)', { accountName, accountName:gsub('^society_', '') })
     end)
     if not ok then
-        print(('[ba_restaurant] Society-Fallback fehlgeschlagen: addon_account konnte nicht geprüft/angelegt werden account=%s'):format(accountName))
+        supportLog('errors', 'Fraktionskonto konnte nicht vorbereitet werden', 'addon_account konnte nicht geprueft oder angelegt werden.', {
+            { name = 'Konto', value = accountName }
+        }, 15158332)
         return nil
     end
 
     local exists = MySQL.scalar.await('SELECT COUNT(*) FROM addon_account WHERE name = ?', { accountName }) or 0
     if tonumber(exists) < 1 then
-        print(('[ba_restaurant] Society-Fallback fehlgeschlagen: addon_account fehlt account=%s'):format(accountName))
+        supportLog('errors', 'Fraktionskonto fehlt', 'Das Konto wurde in addon_account nicht gefunden.', {
+            { name = 'Konto', value = accountName }
+        }, 15158332)
         return nil
     end
 
@@ -431,6 +510,7 @@ local function ensureSchema()
       `screen_size` varchar(32) DEFAULT NULL,
       `sound_enabled` tinyint(1) DEFAULT NULL,
       `sound_range` double DEFAULT NULL,
+      `sound_volume` double DEFAULT NULL,
       `enabled` tinyint(1) NOT NULL DEFAULT 1,
       PRIMARY KEY (`id`), KEY `restaurant_id` (`restaurant_id`), KEY `point_type` (`point_type`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;]])
@@ -520,6 +600,7 @@ local function ensureSchema()
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN screen_size varchar(32) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN sound_enabled tinyint(1) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN sound_range double DEFAULT NULL') end)
+    pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_points ADD COLUMN sound_volume double DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_identifier varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN cashier_name varchar(128) DEFAULT NULL') end)
     pcall(function() MySQL.query.await('ALTER TABLE ba_restaurant_orders ADD COLUMN subtotal decimal(10,2) NOT NULL DEFAULT 0.00') end)
@@ -622,7 +703,7 @@ local function loadRestaurants(includeDisabled)
         if r then
             r.points = r.points or { terminals = {}, manager = {}, kitchen = {}, pickup = {}, cashier = {} }
             r.points[p.point_type] = r.points[p.point_type] or {}
-            table.insert(r.points[p.point_type], { id = p.id, x = p.x, y = p.y, z = p.z, heading = p.heading, label = p.label, point_type = p.point_type, prop_model = p.prop_model, screen_size = p.screen_size, sound_enabled = p.sound_enabled, sound_range = p.sound_range, enabled = tonumber(p.enabled) == 1 })
+            table.insert(r.points[p.point_type], { id = p.id, x = p.x, y = p.y, z = p.z, heading = p.heading, label = p.label, point_type = p.point_type, prop_model = p.prop_model, screen_size = p.screen_size, sound_enabled = p.sound_enabled, sound_range = p.sound_range, sound_volume = p.sound_volume, enabled = tonumber(p.enabled) == 1 })
         end
     end
 
@@ -709,7 +790,19 @@ RegisterNetEvent('ba_restaurant:adminHardDeleteRestaurant', function(data)
     TriggerClientEvent('ba_restaurant:restaurantsRefresh', -1)
 end)
 
-RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointType, x, y, z, heading, propModel, screenSize, soundEnabled, soundRange)
+local function normalizeSoundSettings(pointType, soundEnabled, soundRange, soundVolume)
+    if pointType ~= 'kitchen' and pointType ~= 'pickup' then return nil, nil, nil end
+    local enabled = soundEnabled == true and 1 or 0
+    local range = tonumber(soundRange)
+    if not range or range < 1.0 then range = 18.0 end
+    local volume = tonumber(soundVolume)
+    if not volume then volume = 0.8 end
+    if volume < 0.0 then volume = 0.0 end
+    if volume > 1.0 then volume = 1.0 end
+    return enabled, range, volume
+end
+
+RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointType, x, y, z, heading, propModel, screenSize, soundEnabled, soundRange, soundVolume)
     local src = source
     if not isAdmin(src) then notify(src, 'Keine Berechtigung.', 'error') return end
     restaurantId = slug(restaurantId)
@@ -721,18 +814,28 @@ RegisterNetEvent('ba_restaurant:adminSavePoint', function(restaurantId, pointTyp
     if propModel == '' then propModel = nil end
     screenSize = sanitizeText(screenSize, 32)
     if screenSize ~= 'small' and screenSize ~= 'large' then screenSize = nil end
-    local soundEnabledValue = nil
-    local soundRangeValue = nil
-    if pointType == 'kitchen' or pointType == 'pickup' then
-        soundEnabledValue = soundEnabled == true and 1 or 0
-        soundRangeValue = tonumber(soundRange)
-        if not soundRangeValue or soundRangeValue < 1.0 then soundRangeValue = nil end
-    end
-    MySQL.insert.await('INSERT INTO ba_restaurant_points (restaurant_id, point_type, label, x, y, z, heading, prop_model, screen_size, sound_enabled, sound_range, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)', {
-        restaurantId, pointType, labels[pointType], tonumber(x), tonumber(y), tonumber(z), tonumber(heading) or 0, propModel, screenSize, soundEnabledValue, soundRangeValue
+    local soundEnabledValue, soundRangeValue, soundVolumeValue = normalizeSoundSettings(pointType, soundEnabled, soundRange, soundVolume)
+    MySQL.insert.await('INSERT INTO ba_restaurant_points (restaurant_id, point_type, label, x, y, z, heading, prop_model, screen_size, sound_enabled, sound_range, sound_volume, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)', {
+        restaurantId, pointType, labels[pointType], tonumber(x), tonumber(y), tonumber(z), tonumber(heading) or 0, propModel, screenSize, soundEnabledValue, soundRangeValue, soundVolumeValue
     })
     loadRestaurants()
     notify(src, labels[pointType] .. ' gesetzt.', 'success')
+    TriggerClientEvent('ba_restaurant:restaurantsRefresh', -1)
+end)
+
+RegisterNetEvent('ba_restaurant:adminUpdatePointSound', function(data)
+    local src = source
+    if not isAdmin(src) then notify(src, 'Keine Berechtigung.', 'error') return end
+    if type(data) ~= 'table' then return end
+    local id = tonumber(data.id)
+    local restaurantId = slug(data.restaurantId)
+    if not id or restaurantId == '' then return end
+    local point = MySQL.single.await('SELECT id, point_type FROM ba_restaurant_points WHERE id = ? AND restaurant_id = ? AND enabled = 1', { id, restaurantId })
+    if not point or (point.point_type ~= 'kitchen' and point.point_type ~= 'pickup') then notify(src, 'Monitorpunkt nicht gefunden.', 'error') return end
+    local soundEnabledValue, soundRangeValue, soundVolumeValue = normalizeSoundSettings(point.point_type, data.soundEnabled, data.soundRange, data.soundVolume)
+    MySQL.update.await('UPDATE ba_restaurant_points SET sound_enabled = ?, sound_range = ?, sound_volume = ? WHERE id = ? AND restaurant_id = ?', { soundEnabledValue, soundRangeValue, soundVolumeValue, id, restaurantId })
+    loadRestaurants()
+    notify(src, 'Monitor-Sound gespeichert.', 'success')
     TriggerClientEvent('ba_restaurant:restaurantsRefresh', -1)
 end)
 
@@ -817,9 +920,6 @@ RegisterNetEvent('ba_restaurant:createOrder', function(data)
     end
     tipAmount = math.floor((tipAmount + 0.005) * 100) / 100
     local total = math.floor((subtotal + tipAmount + 0.005) * 100) / 100
-    if Config.Debug then
-        print(('[ba_restaurant] createOrder restaurant=%s requestedPayment=%s items=%s subtotal=%.2f tip=%.2f total=%.2f'):format(tostring(restaurantId), tostring(data.paymentMethod or data.payment_method or data.method or data.payment), tostring(#sanitizedItems), tonumber(subtotal or 0), tonumber(tipAmount or 0), tonumber(total or 0)))
-    end
     local requestedPayment = tostring(data.paymentMethod or data.payment_method or data.method or data.payment or data.payType or data.paymentType or Config.DefaultPaymentMethod or 'card'):lower()
     local paymentMethod = requestedPayment == 'cash' and 'cash' or 'card'
     local paymentStatus = paymentMethod == 'card' and 'paid_card' or 'pending_cash'
@@ -834,7 +934,15 @@ RegisterNetEvent('ba_restaurant:createOrder', function(data)
         societyAccount = getSharedSocietyAccount(societyAccountName)
         if not societyAccount or not societyAccount.addMoney then
             notify(src, 'Kartenzahlung nicht möglich: Fraktionskonto nicht gefunden.', 'error')
-            print(('[ba_restaurant] Kartenzahlung abgebrochen: Society-Konto fehlt restaurant=%s account=%s'):format(tostring(restaurantId), tostring(societyAccountName)))
+            local errorFields = {
+                { name = 'Restaurant', value = restaurant.label or restaurantId },
+                { name = 'Konto', value = tostring(societyAccountName) },
+                { name = 'Summe', value = formatMoney(total) }
+            }
+            for _, field in ipairs(actorLogFields(src, 'Kunde')) do
+                errorFields[#errorFields + 1] = field
+            end
+            supportLog('errors', 'Kartenzahlung abgebrochen', 'Das Fraktionskonto wurde nicht gefunden.', errorFields, 15158332)
             TriggerClientEvent('ba_restaurant:orderFailed', src)
             return
         end
@@ -852,15 +960,32 @@ RegisterNetEvent('ba_restaurant:createOrder', function(data)
         if societyAccount then
             societyAccount.addMoney(total)
             logPayment(restaurantId, orderId, nextNumber, 'card', total, societyAccountName, getIdentifier(src), getCharacterName(src), tipAmount)
-            if Config.Debug then
-                print(('[ba_restaurant] Kartenzahlung %.2f auf Fraktionskonto %s gebucht.'):format(tonumber(total or 0), tostring(societyAccountName)))
-            end
         end
         givePaidReceipt(src, nextNumber, restaurant.label, total, sanitizedItems, 'Mit Karte bezahlt', 'card', orderId, tipAmount, subtotal)
     end
+    local orderLogFields = {
+        { name = 'Restaurant', value = restaurant.label or restaurantId },
+        { name = 'Bestellung', value = '#' .. tostring(nextNumber) },
+        { name = 'Zahlung', value = paymentMethod == 'cash' and 'Bar' or 'Karte' },
+        { name = 'Artikel', value = tostring(#sanitizedItems) },
+        { name = 'Inhalt', value = formatOrderLines(sanitizedItems), inline = false },
+        { name = 'Trinkgeld', value = formatMoney(tipAmount) },
+        { name = 'Summe', value = formatMoney(total) },
+        { name = 'Beleg', value = paymentMethod == 'cash' and 'Bestellzettel ausgegeben' or 'Kassenbon ausgegeben' }
+    }
+    if paymentMethod == 'card' then
+        orderLogFields[#orderLogFields + 1] = { name = 'Konto', value = tostring(societyAccountName) }
+    end
+    for _, field in ipairs(actorLogFields(src, paymentMethod == 'cash' and 'Bestellt von' or 'Bezahlt von')) do
+        orderLogFields[#orderLogFields + 1] = field
+    end
+    supportLog('orders', 'Neue Bestellung', paymentMethod == 'cash' and 'Eine Bar-Bestellung wartet auf Zahlung.' or 'Eine bezahlte Karten-Bestellung wurde erstellt und verbucht.', orderLogFields, paymentMethod == 'cash' and 16763904 or 5763719)
     TriggerClientEvent('ba_restaurant:orderCreated', src, { orderId = orderId, orderNumber = nextNumber, restaurant = restaurant.label, paymentMethod = paymentMethod, paymentStatus = paymentStatus, paid = paymentMethod == 'card', subtotal = subtotal, tipAmount = tipAmount, tip_amount = tipAmount, total = total, items = sanitizedItems })
     TriggerClientEvent('ba_restaurant:kitchenRefresh', -1, restaurantId)
     TriggerClientEvent('ba_restaurant:pickupRefresh', -1, restaurantId)
+    if paymentMethod == 'card' then
+        TriggerClientEvent('ba_restaurant:monitorOrderSound', -1, restaurantId, 'kitchen', orderId)
+    end
 end)
 
 callback('ba_restaurant:getMonitorOrders', function(_, cb, restaurantId)
@@ -899,9 +1024,33 @@ RegisterNetEvent('ba_restaurant:updateOrderStatus', function(restaurantId, order
     if not hasRestaurantJob(src, restaurantId) then return end
     local allowed = { open = true, in_progress = true, ready = true, completed = true, awaiting_payment = true }
     if not allowed[status] then return end
-    MySQL.update.await('UPDATE ba_restaurant_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND restaurant_id = ?', { status, orderId, restaurantId })
+    local affected = MySQL.update.await('UPDATE ba_restaurant_orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND restaurant_id = ?', { status, orderId, restaurantId }) or 0
+    if affected > 0 then
+        local order = MySQL.single.await('SELECT order_number, total, tip_amount FROM ba_restaurant_orders WHERE id = ? AND restaurant_id = ?', { orderId, restaurantId })
+        local restaurant = getRestaurant(restaurantId)
+        local statusLabels = {
+            open = 'In Bearbeitung',
+            in_progress = 'In Bearbeitung',
+            ready = 'Abholbereit',
+            completed = 'Abgeschlossen',
+            awaiting_payment = 'Wartet auf Zahlung'
+        }
+        local statusFields = {
+            { name = 'Restaurant', value = restaurant and restaurant.label or restaurantId },
+            { name = 'Bestellung', value = '#' .. tostring(order and order.order_number or orderId) },
+            { name = 'Status', value = statusLabels[status] or status },
+            { name = 'Summe', value = formatMoney(order and order.total or 0) }
+        }
+        for _, field in ipairs(actorLogFields(src, 'Mitarbeiter')) do
+            statusFields[#statusFields + 1] = field
+        end
+        supportLog('status', 'Bestellstatus geaendert', 'Eine Bestellung hat einen neuen Status erhalten.', statusFields, status == 'completed' and 5763719 or 3447003)
+    end
     TriggerClientEvent('ba_restaurant:kitchenRefresh', -1, restaurantId)
     TriggerClientEvent('ba_restaurant:pickupRefresh', -1, restaurantId)
+    if status == 'ready' then
+        TriggerClientEvent('ba_restaurant:monitorOrderSound', -1, restaurantId, 'pickup', orderId)
+    end
 end)
 
 
@@ -921,12 +1070,25 @@ RegisterNetEvent('ba_restaurant:cashierPayment', function(data)
         local items = {}
         pcall(function() items = json.decode(order.items_json or '[]') or {} end)
         logPayment(restaurantId, order.id, order.order_number, 'cash', order.total, nil, getIdentifier(src), getCharacterName(src), order.tip_amount)
+        local paymentFields = {
+            { name = 'Restaurant', value = restaurant and restaurant.label or restaurantId },
+            { name = 'Bestellung', value = '#' .. tostring(order.order_number) },
+            { name = 'Inhalt', value = formatOrderLines(items), inline = false },
+            { name = 'Trinkgeld', value = formatMoney(order.tip_amount) },
+            { name = 'Summe', value = formatMoney(order.total) },
+            { name = 'Beleg', value = 'Kassenbon ausgegeben' }
+        }
+        for _, field in ipairs(actorLogFields(src, 'Kassierer')) do
+            paymentFields[#paymentFields + 1] = field
+        end
+        supportLog('payments', 'Barzahlung verbucht', 'Eine Barzahlung wurde angenommen und die Bestellung an die Kueche freigegeben.', paymentFields, 16763904)
         givePaidReceipt(src, order.order_number, restaurant and restaurant.label or restaurantId, order.total, items, 'Bar bezahlt', 'cash', order.id, order.tip_amount, order.subtotal)
         notify(src, 'Barzahlung vermerkt. Kassenbon wurde erstellt und die Bestellung an die Küche freigegeben.', 'success')
         TriggerClientEvent('ba_restaurant:kitchenRefresh', -1, restaurantId)
         TriggerClientEvent('ba_restaurant:pickupRefresh', -1, restaurantId)
         TriggerClientEvent('ba_restaurant:cashierRefresh', -1, restaurantId)
         TriggerClientEvent('ba_restaurant:managerRefresh', -1, restaurantId)
+        TriggerClientEvent('ba_restaurant:monitorOrderSound', -1, restaurantId, 'kitchen', order.id)
     else
         notify(src, 'Bestellung nicht gefunden oder bereits bearbeitet.', 'error')
     end
@@ -944,6 +1106,18 @@ RegisterNetEvent('ba_restaurant:closeCashierShift', function(data)
         WHERE restaurant_id = ? AND payment_method = 'cash' AND payment_status = 'paid_cash' AND cash_closed_at IS NULL AND cashier_identifier = ?]], {
         getIdentifier(src), getCharacterName(src), restaurantId, cashierIdentifier
     }) or 0
+    if affected > 0 then
+        local restaurant = getRestaurant(restaurantId)
+        local cashierFields = {
+            { name = 'Restaurant', value = restaurant and restaurant.label or restaurantId },
+            { name = 'Kassierer', value = sanitizeText(data.cashierName or cashierIdentifier, 128) },
+            { name = 'Barzahlungen', value = tostring(affected) }
+        }
+        for _, field in ipairs(actorLogFields(src, 'Manager')) do
+            cashierFields[#cashierFields + 1] = field
+        end
+        supportLog('cashier', 'Kassensturz abgeschlossen', 'Ein Manager hat offene Barzahlungen abgeschlossen.', cashierFields, 5763719)
+    end
     notify(src, affected > 0 and ('Kassensturz abgeschlossen: ' .. affected .. ' Barzahlung(en).') or 'Keine offenen Barzahlungen gefunden.', affected > 0 and 'success' or 'info')
     TriggerClientEvent('ba_restaurant:managerRefresh', src, restaurantId)
 end)

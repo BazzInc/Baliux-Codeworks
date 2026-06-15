@@ -4,6 +4,14 @@ local currentRestaurant = nil
 local restaurants = {}
 local refreshMonitorOrders
 local rebuildInteractionTargets
+local playMonitorSound
+local openUi
+
+local function reopenCreator(restaurantId)
+    SetTimeout(300, function()
+        openUi('admin', restaurantId)
+    end)
+end
 
 local function resetNuiFocus()
     SetNuiFocus(false, false)
@@ -69,7 +77,7 @@ local function refreshRestaurants(cb)
     end)
 end
 
-local function openUi(typeName, restaurantId)
+function openUi(typeName, restaurantId)
     currentUi = typeName
     currentRestaurant = restaurantId
     SetNuiFocus(true, true)
@@ -290,6 +298,12 @@ RegisterNUICallback('close', function(_, cb)
 end)
 
 RegisterNUICallback('createOrder', function(data, cb) TriggerServerEvent('ba_restaurant:createOrder', data) cb({ ok = true }) end)
+RegisterNUICallback('soundPlaybackFailed', function(data, cb)
+    if Config.Debug then
+        print(('[ba_restaurant] Sound konnte in der NUI nicht abgespielt werden: %s'):format(tostring(data and data.file)))
+    end
+    cb({ ok = true })
+end)
 RegisterNUICallback('setOrderStatus', function(data, cb) TriggerServerEvent('ba_restaurant:updateOrderStatus', data.restaurantId, data.orderId, data.status) cb({ ok = true }) end)
 RegisterNUICallback('cashierPayment', function(data, cb) TriggerServerEvent('ba_restaurant:cashierPayment', data) cb({ ok = true }) end)
 RegisterNUICallback('saveProduct', function(data, cb) TriggerServerEvent('ba_restaurant:saveProduct', data) cb({ ok = true }) end)
@@ -314,7 +328,12 @@ RegisterNUICallback('setPointHere', function(data, cb)
     local ped = PlayerPedId()
     local coords = GetEntityCoords(ped)
     local heading = GetEntityHeading(ped)
-    TriggerServerEvent('ba_restaurant:adminSavePoint', data.restaurantId, data.pointType, coords.x, coords.y, coords.z, heading, nil, data.screenSize, data.soundEnabled, data.soundRange)
+    TriggerServerEvent('ba_restaurant:adminSavePoint', data.restaurantId, data.pointType, coords.x, coords.y, coords.z, heading, nil, data.screenSize, data.soundEnabled, data.soundRange, data.soundVolume)
+    cb({ ok = true })
+end)
+RegisterNUICallback('updatePointSound', function(data, cb) TriggerServerEvent('ba_restaurant:adminUpdatePointSound', data) cb({ ok = true }) end)
+RegisterNUICallback('testMonitorSound', function(data, cb)
+    playMonitorSound(data.pointType, tonumber(data.soundVolume) or 0.8)
     cb({ ok = true })
 end)
 RegisterNUICallback('deletePoint', function(data, cb) TriggerServerEvent('ba_restaurant:adminDeletePoint', data.id) cb({ ok = true }) end)
@@ -377,17 +396,22 @@ local monitorLastDuiPayload = {}
 local monitorLastDuiSent = {}
 local monitorFetchSerial = {}
 local monitorSoundState = {}
+local monitorSoundPlayed = {}
 
 local function monitorSoundEnabled(group)
     local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
-    return cfg and cfg.enabled == true
+    return cfg and cfg.file and cfg.file ~= ''
 end
 
-local function playMonitorSound(group)
+function playMonitorSound(group, volume)
     local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
-    if not cfg or cfg.enabled ~= true then return end
+    if not cfg then
+        if Config.Debug then print(('[ba_restaurant] Kein MonitorSound-Config fuer %s'):format(tostring(group))) end
+        return
+    end
     if cfg.file and cfg.file ~= '' then
-        SendNUIMessage({ action = 'playMonitorSound', file = cfg.file, volume = cfg.volume or 0.8 })
+        if Config.Debug then print(('[ba_restaurant] Spiele Monitor-Sound group=%s file=%s volume=%.2f'):format(tostring(group), tostring(cfg.file), tonumber(volume or 0.8))) end
+        SendNUIMessage({ action = 'playMonitorSound', file = cfg.file, volume = volume or 0.8 })
         return
     end
     PlaySoundFrontend(-1, cfg.soundName or 'CHECKPOINT_NORMAL', cfg.soundSet or 'HUD_MINI_GAME_SOUNDSET', true)
@@ -403,21 +427,33 @@ end
 local function pointSoundRange(group, point)
     local range = point and tonumber(point.sound_range)
     if range and range > 0 then return range end
-    local cfg = Config.MonitorSounds and Config.MonitorSounds[group]
-    return (cfg and tonumber(cfg.range)) or (Config.MonitorLiveDisplay and Config.MonitorLiveDisplay.drawDistance) or 18.0
+    return 18.0
 end
 
-local function canHearMonitorSound(restaurantId, group)
+local function pointSoundVolume(point)
+    local volume = point and tonumber(point.sound_volume)
+    if not volume then return 0.8 end
+    if volume < 0.0 then return 0.0 end
+    if volume > 1.0 then return 1.0 end
+    return volume
+end
+
+local function audibleMonitorSoundVolume(restaurantId, group)
     local restaurant = restaurants and restaurants[restaurantId]
-    if not restaurant or not restaurant.points or not restaurant.points[group] then return false end
+    if not restaurant or not restaurant.points or not restaurant.points[group] then return nil end
     local playerCoords = GetEntityCoords(PlayerPedId())
+    local bestDist, bestVolume = nil, nil
     for _, point in ipairs(restaurant.points[group] or {}) do
         if pointSoundEnabled(group, point) then
             local coords = vector3(point.x or point.coords.x, point.y or point.coords.y, point.z or point.coords.z)
-            if #(playerCoords - coords) <= pointSoundRange(group, point) then return true end
+            local dist = #(playerCoords - coords)
+            if dist <= pointSoundRange(group, point) and (not bestDist or dist < bestDist) then
+                bestDist = dist
+                bestVolume = pointSoundVolume(point)
+            end
         end
     end
-    return false
+    return bestVolume
 end
 
 local function indexOrders(orders, onlyReady)
@@ -438,14 +474,51 @@ local function hasNewOrder(previous, current)
     return false
 end
 
+local function firstNewOrder(previous, current)
+    if not previous then return nil end
+    for id in pairs(current or {}) do
+        if not previous[id] then return id end
+    end
+    return nil
+end
+
+local function playMonitorGroupSound(restaurantId, group, orderId)
+    if not monitorSoundEnabled(group) then
+        if Config.Debug then print(('[ba_restaurant] Monitor-Sound deaktiviert/keine Datei group=%s'):format(tostring(group))) end
+        return
+    end
+    local volume = audibleMonitorSoundVolume(restaurantId, group)
+    if not volume then
+        if Config.Debug then print(('[ba_restaurant] Kein hoerbarer Monitor in Reichweite restaurant=%s group=%s'):format(tostring(restaurantId), tostring(group))) end
+        return
+    end
+    local key = tostring(restaurantId) .. ':' .. tostring(group) .. ':' .. tostring(orderId or 'event')
+    local now = GetGameTimer()
+    if monitorSoundPlayed[key] and (now - monitorSoundPlayed[key]) < 3000 then return end
+    monitorSoundPlayed[key] = now
+    playMonitorSound(group, volume)
+end
+
 local function handleMonitorSounds(restaurantId, result)
     local state = monitorSoundState[restaurantId] or {}
     local kitchenNow = indexOrders(result and result.kitchen or {}, false)
     local pickupReadyNow = indexOrders(result and result.pickup or {}, true)
-    if monitorSoundEnabled('kitchen') and hasNewOrder(state.kitchen, kitchenNow) and canHearMonitorSound(restaurantId, 'kitchen') then playMonitorSound('kitchen') end
-    if monitorSoundEnabled('pickup') and hasNewOrder(state.pickupReady, pickupReadyNow) and canHearMonitorSound(restaurantId, 'pickup') then playMonitorSound('pickup') end
+    local kitchenNew = firstNewOrder(state.kitchen, kitchenNow)
+    local pickupNew = firstNewOrder(state.pickupReady, pickupReadyNow)
+    if kitchenNew then playMonitorGroupSound(restaurantId, 'kitchen', kitchenNew) end
+    if pickupNew then playMonitorGroupSound(restaurantId, 'pickup', pickupNew) end
     monitorSoundState[restaurantId] = { kitchen = kitchenNow, pickupReady = pickupReadyNow }
 end
+
+RegisterNetEvent('ba_restaurant:monitorOrderSound', function(restaurantId, group, orderId)
+    if not restaurants or not restaurants[restaurantId] then
+        refreshRestaurants(function()
+            playMonitorGroupSound(restaurantId, group, orderId)
+        end)
+        return
+    end
+    playMonitorGroupSound(restaurantId, group, orderId)
+end)
 
 local function parseItems(itemsJson)
     local ok, items = pcall(function() return json.decode(itemsJson or '[]') end)
@@ -725,6 +798,7 @@ local function startMonitorPlacement(data)
     local screenSize = data and data.screenSize
     local soundEnabled = data and data.soundEnabled
     local soundRange = data and data.soundRange
+    local soundVolume = data and data.soundVolume
     if not restaurantId or (pointType ~= 'kitchen' and pointType ~= 'pickup') then return end
 
     SendNUIMessage({ action = 'forceClose' })
@@ -786,12 +860,14 @@ local function startMonitorPlacement(data)
 
         if IsControlJustReleased(0, 191) then -- Enter
             DeleteEntity(obj)
-            TriggerServerEvent('ba_restaurant:adminSavePoint', restaurantId, pointType, coords.x, coords.y, coords.z, heading, model, screenSize, soundEnabled, soundRange)
+            TriggerServerEvent('ba_restaurant:adminSavePoint', restaurantId, pointType, coords.x, coords.y, coords.z, heading, model, screenSize, soundEnabled, soundRange, soundVolume)
             notify('TV-Monitor gespeichert.', 'success')
+            reopenCreator(restaurantId)
             break
         elseif IsControlJustReleased(0, 177) then -- Backspace
             DeleteEntity(obj)
             notify('TV-Platzierung abgebrochen.', 'info')
+            reopenCreator(restaurantId)
             break
         end
     end

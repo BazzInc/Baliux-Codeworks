@@ -43,6 +43,8 @@ function render(meta){
   const currency = meta.currency || '$';
   const items = parseItems(meta);
   const orderNumber = meta.order_number || meta.orderNumber || meta.order_id || '-';
+  const tip = Number(meta.tip_amount || meta.tip || 0);
+  const subtotal = Number(meta.subtotal || Math.max(0, Number(meta.total || 0) - tip));
   paper.innerHTML = `
     <div class="top">
       <h1>${paid ? 'KASSENBON' : 'BESTELLZETTEL'}</h1>
@@ -58,6 +60,7 @@ function render(meta){
       ${items.length ? items.map(i=> i.raw ? `<li><span>${safe(i.raw)}</span></li>` : `<li><span>${safe(i.amount || 1)}x ${safe(i.label || 'Artikel')}</span><b>${money(i.total ?? ((i.price||0)*(i.amount||1)), currency)}</b></li>`).join('') : '<li><span>Keine Positionen gespeichert</span></li>'}
     </ul>
     <hr>
+    ${tip > 0 ? `<div class="total muted-line"><span>Zwischensumme</span><b>${money(subtotal, currency)}</b></div><div class="total muted-line"><span>Trinkgeld</span><b>${money(tip, currency)}</b></div>` : ''}
     <div class="total"><span>Summe</span><b>${money(meta.total, currency)}</b></div>
     <p class="hint">${paid ? 'Dieser Bon ist bereits bezahlt. Bitte als Nachweis bis zur Abholung behalten.' : 'Mit diesem Zettel bitte zur Kasse gehen und die Bestellnummer nennen.'}</p>
   `;
