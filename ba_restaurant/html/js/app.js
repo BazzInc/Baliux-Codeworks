@@ -4,7 +4,7 @@ const closeBtn = document.getElementById('closeBtn');
 const isTvDisplay = new URLSearchParams(window.location.search).get('tv') === '1';
 if (isTvDisplay) document.body.classList.add('tv-display');
 
-let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, tipModal: null, managerTab: 'categories', editing: null, adminRestaurant: null, cashierSearch: '', submittingOrder: false, confirmDialog: null };
+let state = { view: null, restaurantId: null, payload: {}, cart: [], activeCategory: null, modalProduct: null, modalQty: 1, tipModal: null, managerTab: 'categories', editing: null, adminRestaurant: null, adminScrollTop: 0, cashierSearch: '', submittingOrder: false, confirmDialog: null };
 
 function closeUi(){
   state.view = null;
@@ -37,6 +37,14 @@ function fmtTime(value){ return value ? safe(value) : '-'; }
 function validColor(v, fallback){ v=String(v||'').trim(); return /^#[0-9a-f]{6}$/i.test(v) ? v : fallback; }
 function hexToRgb(hex){ hex=validColor(hex,'#e85d3f').slice(1); return `${parseInt(hex.slice(0,2),16)},${parseInt(hex.slice(2,4),16)},${parseInt(hex.slice(4,6),16)}`; }
 function activeTheme(){ return state.payload.theme || (state.payload.restaurants && state.adminRestaurant && state.payload.restaurants[state.adminRestaurant]?.theme) || {}; }
+function rememberAdminPosition(){
+  const panel = document.querySelector('.admin-creator .panel');
+  if(panel) state.adminScrollTop = panel.scrollTop || 0;
+}
+function restoreAdminPosition(){
+  const panel = document.querySelector('.admin-creator .panel');
+  if(panel && state.adminScrollTop) requestAnimationFrame(()=>{ panel.scrollTop = state.adminScrollTop; });
+}
 function applyTheme(theme){
   theme = theme || {};
   const primary = validColor(theme.primary, '#e85d3f');
@@ -55,9 +63,29 @@ function iconForCategory(name,label){ const t=(name+' '+label).toLowerCase(); if
 function catTabContent(c){ const img=imagePath(c); return img ? `<span class="cat-tab-img"><img src="${safe(img)}" onerror="this.parentNode.innerHTML='${safe(iconForCategory(c.name,c.label))}'"></span> ${safe(c.label)}` : `${safe(c.icon || iconForCategory(c.name, c.label))} ${safe(c.label)}`; }
 function playUiSound(file, volume){
   if(!file) return;
-  const audio = new Audio(file.startsWith('html/') ? file.slice(5) : file);
-  audio.volume = Math.max(0, Math.min(1, Number(volume ?? 0.8)));
-  audio.play().catch(()=>{});
+  const clean = file.startsWith('html/') ? file.slice(5) : file;
+  const resource = typeof GetParentResourceName === 'function' ? GetParentResourceName() : '';
+  const candidates = [
+    clean,
+    `./${clean}`,
+    resource ? `nui://${resource}/html/${clean}` : clean
+  ];
+  const vol = Math.max(0, Math.min(1, Number(volume ?? 1.0)));
+  const tryPlay = (idx = 0) => {
+    if(idx >= candidates.length){
+      post('soundPlaybackFailed', { file });
+      return;
+    }
+    const audio = new Audio(candidates[idx]);
+    audio.volume = vol;
+    audio.preload = 'auto';
+    audio.onended = () => audio.remove();
+    audio.onerror = () => { audio.remove(); tryPlay(idx + 1); };
+    document.body.appendChild(audio);
+    const promise = audio.play();
+    if(promise && promise.catch) promise.catch(()=>{ audio.remove(); tryPlay(idx + 1); });
+  };
+  tryPlay(0);
 }
 
 if (closeBtn) closeBtn.onclick = () => { closeUi(); post('close'); };
@@ -122,7 +150,7 @@ function addToCart(product, amount=1){ const key=(product.type||'product')+':'+p
 function openProduct(product){ state.modalProduct = product; state.modalQty = 1; renderTerminal(); }
 function openTipModal(method){
   if(state.payload.tips && state.payload.tips.enabled === false){ state.tipModal = { method, custom: '' }; submitOrderWithTip(0); return; }
-  state.tipModal = { method, custom: '' };
+  state.tipModal = { method, selected: 0, custom: '' };
   renderTerminal();
 }
 function submitOrderWithTip(tipAmount){
@@ -136,9 +164,10 @@ function submitOrderWithTip(tipAmount){
 function tipModalHtml(){
   if(!state.tipModal) return '';
   const total = cartTotal();
-  const custom = Math.max(0, Number(state.tipModal.custom || 0));
+  const selected = Math.max(0, Number(state.tipModal.selected || 0));
   const presets = (state.payload.tips && Array.isArray(state.payload.tips.presets) ? state.payload.tips.presets : [10,20,30]).filter(p=>Number(p)>0);
-  return `<div class="modal-back"><div class="modal tip-modal"><div class="modal-content"><h2>Trinkgeld</h2><p class="muted">Moechtest du Trinkgeld geben?</p><div class="tip-options"><button class="btn" data-tip="0">Ohne</button>${presets.map(p=>`<button class="btn" data-tip="${(total*(Number(p)/100)).toFixed(2)}">${Number(p)}%</button>`).join('')}</div><label class="tip-custom"><span>Freier Betrag</span><input id="customTip" type="number" min="0" step="0.01" value="${safe(state.tipModal.custom || '')}" placeholder="0.00"></label><div class="tip-total"><span>Gesamt</span><b>${money(total + custom)}</b></div><div class="modal-actions"><button class="btn" id="tipCancel">Abbrechen</button><button class="btn primary" id="tipCustomPay">Bezahlen</button></div></div></div></div>`;
+  const button = (label, amount) => `<button class="btn ${Number(selected).toFixed(2)===Number(amount).toFixed(2)?'primary':''}" data-tip="${Number(amount).toFixed(2)}">${label}</button>`;
+  return `<div class="modal-back"><div class="modal tip-modal"><div class="modal-content"><h2>Trinkgeld</h2><p class="muted">Moechtest du Trinkgeld geben?</p><div class="tip-options">${button('Ohne',0)}${presets.map(p=>button(Number(p)+'%', total*(Number(p)/100))).join('')}</div><label class="tip-custom"><span>Freier Betrag</span><input id="customTip" type="number" min="0" step="0.01" value="${safe(state.tipModal.custom || '')}" placeholder="0.00"></label><div class="tip-total"><span>Gesamt</span><b>${money(total + selected)}</b></div><div class="modal-actions"><button class="btn" id="tipCancel">Abbrechen</button><button class="btn primary" id="tipCustomPay">Bezahlen</button></div></div></div></div>`;
 }
 
 function renderTerminal(){
@@ -169,10 +198,10 @@ function renderTerminal(){
   const add=document.getElementById('modalAdd'); if(add) add.onclick=()=>addToCart(state.modalProduct,state.modalQty);
   const plus=document.getElementById('qtyPlus'); if(plus) plus.onclick=()=>{state.modalQty++; renderTerminal();};
   const minus=document.getElementById('qtyMinus'); if(minus) minus.onclick=()=>{state.modalQty=Math.max(1,state.modalQty-1); renderTerminal();};
-  document.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>submitOrderWithTip(Number(b.dataset.tip || 0)));
+  document.querySelectorAll('[data-tip]').forEach(b=>b.onclick=()=>{ if(!state.tipModal) return; state.tipModal.selected=Number(b.dataset.tip || 0); state.tipModal.custom=''; renderTerminal(); });
   const tipCancel=document.getElementById('tipCancel'); if(tipCancel) tipCancel.onclick=()=>{state.tipModal=null; renderTerminal();};
-  const customTip=document.getElementById('customTip'); if(customTip) customTip.oninput=()=>{ if(state.tipModal) state.tipModal.custom=customTip.value; const out=document.querySelector('.tip-total b'); if(out) out.textContent=money(cartTotal()+Math.max(0,Number(customTip.value||0))); };
-  const tipCustomPay=document.getElementById('tipCustomPay'); if(tipCustomPay) tipCustomPay.onclick=()=>submitOrderWithTip(Number((document.getElementById('customTip')||{}).value || 0));
+  const customTip=document.getElementById('customTip'); if(customTip) customTip.oninput=()=>{ if(state.tipModal){ state.tipModal.custom=customTip.value; state.tipModal.selected=Math.max(0,Number(customTip.value||0)); } const out=document.querySelector('.tip-total b'); if(out) out.textContent=money(cartTotal()+Math.max(0,Number(customTip.value||0))); };
+  const tipCustomPay=document.getElementById('tipCustomPay'); if(tipCustomPay) tipCustomPay.onclick=()=>submitOrderWithTip(Number(state.tipModal?.selected || 0));
 }
 function productCard(p){ return `<article class="product-card visual-card"><div class="product-image">${imgTag(p,p.label)}</div><div class="product-info"><h3>${safe(p.label)}</h3><b class="product-price">${money(p.price)}</b></div><button class="order-btn" data-product="${p.type||'product'}:${p.id}"><span>Bestellen</span></button></article>`; }
 function modalHtml(p){ return `<div class="modal-back"><div class="modal"><div class="modal-img">${imgTag(p,p.label)}</div><div class="modal-content"><h2>${safe(p.label)}</h2><div class="modal-row"><span class="price">${money(Number(p.price)*state.modalQty)}</span><div class="qty"><button id="qtyMinus">−</button><span>${state.modalQty}</span><button id="qtyPlus">+</button></div></div><div class="modal-actions"><button class="btn" id="modalCancel">Abbrechen</button><button class="btn primary" id="modalAdd">Hinzufügen</button></div></div></div></div>`; }
@@ -304,6 +333,14 @@ function bindManager(){
 
 function restaurantArray(){ const r = state.payload.restaurants || {}; return Object.keys(r).sort((a,b)=>Number(r[b].enabled??1)-Number(r[a].enabled??1)||String(r[a].label).localeCompare(String(r[b].label))).map(id=>({id, ...r[id]})); }
 function pointLabel(t){ return {terminals:'Bestellterminal',manager:'Manager-Laptop',kitchen:'Küchenmonitor',pickup:'Abholmonitor',cashier:'Kasse'}[t] || t; }
+function monitorSoundControls(t){
+  if(t !== 'kitchen' && t !== 'pickup') return '';
+  return '<div class="monitor-options"><label><span>Groesse</span><select class="monitor-size"><option value="large">Gross</option><option value="small">Klein</option></select></label><label><span>Ton</span><select class="monitor-sound"><option value="1">An</option><option value="0">Aus</option></select></label><label><span>Reichweite</span><input class="monitor-range" type="number" min="1" step="1" value="18"></label><label><span>Lautstaerke</span><input class="monitor-volume" type="number" min="0" max="1" step="0.05" value="0.8"></label><button class="btn mini" data-testsound="'+t+'">Sound testen</button><button class="btn mini" data-placetv="'+t+'">TV platzieren</button></div>';
+}
+function pointSoundControls(t, p, soundEnabled, range, volume){
+  if(t !== 'kitchen' && t !== 'pickup') return '';
+  return '<div class="point-sound-row" data-point-sound="'+p.id+'"><label><span>Ton</span><select class="point-sound-enabled"><option value="1" '+(soundEnabled==='1'?'selected':'')+'>An</option><option value="0" '+(soundEnabled==='0'?'selected':'')+'>Aus</option></select></label><label><span>Reichweite</span><input class="point-sound-range" type="number" min="1" step="1" value="'+safe(range)+'"></label><label><span>Lautstaerke</span><input class="point-sound-volume" type="number" min="0" max="1" step="0.05" value="'+safe(volume)+'"></label><button class="btn mini" data-testsound="'+t+'">Testen</button><button class="btn mini primary" data-savepointsound="'+p.id+'">Speichern</button></div>';
+}
 function renderAdmin(){
   if(!state.payload.ok){ content.innerHTML=`<section class="panel"><h1>Restaurant-Creator</h1><p>${safe(state.payload.error||'Keine Berechtigung.')}</p></section>`; return; }
   const list = restaurantArray();
@@ -314,15 +351,21 @@ function renderAdmin(){
   const types = ['terminals','manager','kitchen','pickup','cashier'];
   content.innerHTML = `<section class="manager admin-creator"><div class="manager-top"><h1>Restaurant-Creator</h1></div><div class="manager-grid"><aside class="side"><button class="btn primary" id="newRestaurant">+ Neuer Laden</button>${list.map(r=>`<button class="btn ${r.id===state.adminRestaurant?'primary':''} ${Number(r.enabled??1)?'':'is-disabled'}" data-adminrest="${safe(r.id)}">${safe(r.label)}<small>${safe(r.id)}${Number(r.enabled??1)?'':' · deaktiviert'}</small></button>`).join('')}</aside><section class="panel">${adminPanel(e, active, types)}</section></div></section>`;
   content.insertAdjacentHTML('beforeend', confirmHtml());
-  bindAdmin(); bindConfirm();
+  bindAdmin(); bindConfirm(); restoreAdminPosition();
 }
 function adminPanel(e, active, types){
   const isNew = !(e && e.id);
   const rid = e.id || active.id || '';
   const pointsHtml = active && active.id ? types.map(t=>{
     const points = (active.points && active.points[t]) || [];
-    const monitorControls = (t==='kitchen'||t==='pickup') ? '<div class="monitor-options"><select class="monitor-size"><option value="large">Bildschirm: gross</option><option value="small">Bildschirm: klein</option></select><select class="monitor-sound"><option value="1">Ton an</option><option value="0">Ton aus</option></select><input class="monitor-range" type="number" min="1" step="1" value="18" placeholder="Reichweite"><button class="btn mini" data-placetv="'+t+'">TV platzieren</button></div>' : '';
-    return '<div class="point-box"><div><b>'+pointLabel(t)+'</b></div>'+monitorControls+'<button class="btn mini primary" data-setpoint="'+t+'">Hier setzen</button>'+points.map(p=>'<div class="point-row"><span>#'+p.id+' - '+safe(p.screen_size||'standard')+' - Ton '+(Number(p.sound_enabled??1)?'an':'aus')+' / '+safe(p.sound_range||18)+'m - '+Number(p.x).toFixed(2)+', '+Number(p.y).toFixed(2)+', '+Number(p.z).toFixed(2)+'</span><button class="btn mini" data-delpoint="'+p.id+'">Entfernen</button></div>').join('')+'</div>';
+    const monitorControls = monitorSoundControls(t);
+    return '<div class="point-box"><div><b>'+pointLabel(t)+'</b></div>'+monitorControls+'<button class="btn mini primary" data-setpoint="'+t+'">Hier setzen</button>'+points.map(p=>{
+      const soundEnabled = Number(p.sound_enabled??1) ? '1' : '0';
+      const range = Number(p.sound_range || 18);
+      const volume = Number(p.sound_volume ?? 0.8);
+      const monitorSound = pointSoundControls(t, p, soundEnabled, range, volume);
+      return '<div class="point-row"><div class="point-row-head"><span>#'+p.id+' - '+safe(p.screen_size||'standard')+' - '+Number(p.x).toFixed(2)+', '+Number(p.y).toFixed(2)+', '+Number(p.z).toFixed(2)+'</span><button class="btn mini" data-delpoint="'+p.id+'">Entfernen</button></div>'+monitorSound+'</div>';
+    }).join('')+'</div>';
   }).join('') : '<p class="muted">Speichere den Laden zuerst, dann kannst du Punkte setzen.</p>';
   const disabled = active && active.id && Number(active.enabled??1)===0;
   return '<div class="manager-headline"><div><h2>'+(isNew?'Neuen Laden erstellen':'Laden bearbeiten')+(disabled?' - deaktiviert':'')+'</h2></div>'+((active&&active.id&&Number(active.enabled??1)!==0)?'<button class="btn" id="openManagerForRestaurant">Produkte/Kategorien oeffnen</button>':'')+'</div><div class="form"><input id="adminId" placeholder="Interne ID z.B. burgershot" value="'+safe(rid)+'" '+(isNew?'':'readonly')+'><input id="adminLabel" placeholder="Anzeigename z.B. Burger Shot" value="'+safe(e.label||'')+'"><input id="adminJob" placeholder="Jobname z.B. burgershot" value="'+safe(e.job||'')+'"><input id="adminSociety" placeholder="Society-Konto, leer = society_jobname" value="'+safe(e.societyAccount||e.society_account||'')+'"><button class="btn primary full" id="saveRestaurant">'+(disabled?'Laden reaktivieren / speichern':'Laden speichern')+'</button>'+((active&&active.id&&Number(active.enabled??1)!==0)?'<button class="btn full" id="deleteRestaurant">Laden deaktivieren</button>':'')+(disabled?'<button class="btn danger full" id="hardDeleteRestaurant">Endgueltig loeschen</button>':'')+'</div><h2>Punkte setzen</h2><div class="point-grid">'+pointsHtml+'</div>';
@@ -344,7 +387,9 @@ function bindAdmin(){
   (document.getElementById('deleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('deleteRestaurant',{restaurantId:state.adminRestaurant}); };
   (document.getElementById('hardDeleteRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) openConfirm('Laden loeschen', 'Produkte, Punkte, Menues, Bestellungen und Buchungen werden endgueltig entfernt.', 'hardDeleteRestaurant', {restaurantId:state.adminRestaurant,confirm:true}); };
   (document.getElementById('openManagerForRestaurant')||{}).onclick=()=>{ if(state.adminRestaurant) post('openRestaurantManager',{restaurantId:state.adminRestaurant}); };
-  document.querySelectorAll('[data-setpoint]').forEach(b=>b.onclick=()=>{ const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); if(state.adminRestaurant) post('setPointHere',{restaurantId:state.adminRestaurant,pointType:b.dataset.setpoint,screenSize:size,soundEnabled:sound,soundRange:range}); });
-  document.querySelectorAll('[data-placetv]').forEach(b=>b.onclick=()=>{ const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value || 'large'; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); if(state.adminRestaurant) post('placeMonitorTv',{restaurantId:state.adminRestaurant,pointType:b.dataset.placetv,screenSize:size,soundEnabled:sound,soundRange:range}); });
+  document.querySelectorAll('[data-setpoint]').forEach(b=>b.onclick=()=>{ rememberAdminPosition(); const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); const volume=Number(box?.querySelector('.monitor-volume')?.value || 0.8); if(state.adminRestaurant) post('setPointHere',{restaurantId:state.adminRestaurant,pointType:b.dataset.setpoint,screenSize:size,soundEnabled:sound,soundRange:range,soundVolume:volume}); });
+  document.querySelectorAll('[data-placetv]').forEach(b=>b.onclick=()=>{ rememberAdminPosition(); const box=b.closest('.point-box'); const size=box?.querySelector('.monitor-size')?.value || 'large'; const sound=box?.querySelector('.monitor-sound')?.value !== '0'; const range=Number(box?.querySelector('.monitor-range')?.value || 18); const volume=Number(box?.querySelector('.monitor-volume')?.value || 0.8); if(state.adminRestaurant) post('placeMonitorTv',{restaurantId:state.adminRestaurant,pointType:b.dataset.placetv,screenSize:size,soundEnabled:sound,soundRange:range,soundVolume:volume}); });
+  document.querySelectorAll('[data-testsound]').forEach(b=>b.onclick=()=>{ const wrap=b.closest('.point-sound-row') || b.closest('.point-box'); const volume=Number(wrap?.querySelector('.point-sound-volume, .monitor-volume')?.value || 0.8); post('testMonitorSound',{pointType:b.dataset.testsound,soundVolume:volume}); });
+  document.querySelectorAll('[data-savepointsound]').forEach(b=>b.onclick=()=>{ const row=b.closest('[data-point-sound]'); if(!row || !state.adminRestaurant) return; post('updatePointSound',{restaurantId:state.adminRestaurant,id:Number(b.dataset.savepointsound),soundEnabled:row.querySelector('.point-sound-enabled')?.value !== '0',soundRange:Number(row.querySelector('.point-sound-range')?.value || 18),soundVolume:Number(row.querySelector('.point-sound-volume')?.value || 0.8)}); });
   document.querySelectorAll('[data-delpoint]').forEach(b=>b.onclick=()=>post('deletePoint',{id:Number(b.dataset.delpoint)}));
 }

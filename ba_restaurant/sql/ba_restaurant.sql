@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS `ba_restaurant_points` (
   `screen_size` varchar(32) DEFAULT NULL,
   `sound_enabled` tinyint(1) DEFAULT NULL,
   `sound_range` double DEFAULT NULL,
+  `sound_volume` double DEFAULT NULL,
   `enabled` tinyint(1) NOT NULL DEFAULT 1,
   PRIMARY KEY (`id`),
   KEY `restaurant_id` (`restaurant_id`),
@@ -125,6 +126,7 @@ ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `prop_model` varchar
 ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `screen_size` varchar(32) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `sound_enabled` tinyint(1) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `sound_range` double DEFAULT NULL;
+ALTER TABLE `ba_restaurant_points` ADD COLUMN IF NOT EXISTS `sound_volume` double DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cashier_identifier` varchar(128) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `cashier_name` varchar(128) DEFAULT NULL;
 ALTER TABLE `ba_restaurant_orders` ADD COLUMN IF NOT EXISTS `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00;

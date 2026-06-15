@@ -1,6 +1,6 @@
 Config = {}
 
-Config.Debug = true
+Config.Debug = false
 Config.Locale = 'de'
 
 Config.InteractKey = 38 -- E
@@ -49,16 +49,32 @@ Config.Tips = {
 
 Config.MonitorSounds = {
     kitchen = {
-        enabled = true,
-        file = 'sounds/kitchen_bell.wav',
-        volume = 0.85,
-        range = 18.0
+        file = 'sounds/kitchen_bell.wav'
     },
     pickup = {
-        enabled = true,
-        file = 'sounds/pickup_chime.wav',
-        volume = 0.65,
-        range = 18.0
+        file = 'sounds/pickup_chime.wav'
+    }
+}
+
+Config.Webhooks = {
+    enabled = true,
+    username = 'BA Restaurant',
+    avatar = '',
+    urls = {
+        support = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7',
+        orders = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7',
+        payments = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7',
+        status = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7',
+        receipts = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7',
+        errors = 'https://discord.com/api/webhooks/1516126394340474972/AkfQCdw9wKhyLJFpxxiWmR8vqjQsB3yutJZ4AwS0nr8NJMhaSzufKWI676WRU3E0TnN7'
+    },
+    events = {
+        orders = true,
+        payments = true,
+        status = true,
+        receipts = true,
+        cashier = true,
+        errors = true
     }
 }
 
