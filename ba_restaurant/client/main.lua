@@ -89,6 +89,14 @@ function openUi(typeName, restaurantId)
         end, restaurantId)
     elseif typeName == 'manager' then
         serverCallback('ba_restaurant:getManagerData', function(data)
+            if data and data.ok == false then
+                notify(data.error or 'Keine Berechtigung fuer den Manager-Laptop.', 'error')
+                SendNUIMessage({ action = 'forceClose' })
+                resetNuiFocus()
+                currentUi = nil
+                currentRestaurant = nil
+                return
+            end
             SendNUIMessage({ action = 'open', view = 'manager', restaurantId = restaurantId, payload = data })
         end, restaurantId)
     elseif typeName == 'admin' then

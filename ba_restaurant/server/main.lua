@@ -443,13 +443,47 @@ local function getSharedSocietyAccount(accountName)
     return getSqlSocietyAccount(accountName)
 end
 
+local highestJobGradeCache = {}
+
+local function normalizeJobValue(value)
+    return sanitizeText(value, 128):lower()
+end
+
+local function getJobGradeNumber(job)
+    if not job then return nil end
+    local grade = tonumber(job.grade)
+    if grade then return grade end
+    if type(job.grade) == 'table' then
+        grade = tonumber(job.grade.grade or job.grade.level or job.grade.id)
+        if grade then return grade end
+    end
+    return nil
+end
+
+local function isHighestJobGrade(job)
+    local jobName = normalizeJobValue(job and job.name)
+    local grade = getJobGradeNumber(job)
+    if jobName == '' or not grade then return false end
+
+    if highestJobGradeCache[jobName] == nil then
+        highestJobGradeCache[jobName] = tonumber(MySQL.scalar.await('SELECT MAX(grade) FROM job_grades WHERE job_name = ?', { jobName }) or -1) or -1
+    end
+
+    return highestJobGradeCache[jobName] >= 0 and grade >= highestJobGradeCache[jobName]
+end
+
+local function gradeAllowed(allowedGrades, value)
+    value = normalizeJobValue(value)
+    return value ~= '' and allowedGrades[value] == true
+end
+
 local function hasRestaurantJob(source, restaurantId)
     local restaurant = getRestaurant(restaurantId)
     if not restaurant then return false end
     refreshFramework()
     if not ESX then return false end
     local job = getJobData(source)
-    return job and job.name == restaurant.job
+    return job and normalizeJobValue(job.name) == normalizeJobValue(restaurant.job)
 end
 
 local function hasManagementAccess(source, restaurantId, includeAdmin)
@@ -459,14 +493,15 @@ local function hasManagementAccess(source, restaurantId, includeAdmin)
     refreshFramework()
     if not ESX then return true end
     local job = getJobData(source)
-    if not job or job.name ~= restaurant.job then return false end
+    if not job or normalizeJobValue(job.name) ~= normalizeJobValue(restaurant.job) then return false end
     local management = Config.Management or {}
     if management.requireBoss == false then return true end
     local allowedGrades = restaurant.managementGrades or management.allowedGrades or { boss = true, owner = true }
-    local gradeName = tostring(job.grade_name or ''):lower()
-    if allowedGrades[gradeName] then return true end
+    if gradeAllowed(allowedGrades, job.grade_name) or gradeAllowed(allowedGrades, job.grade_label) or gradeAllowed(allowedGrades, job.label) then return true end
     local minGrade = restaurant.managementMinGrade or management.minGrade
-    if minGrade and tonumber(job.grade or -1) >= tonumber(minGrade) then return true end
+    local grade = getJobGradeNumber(job)
+    if minGrade and grade and grade >= tonumber(minGrade) then return true end
+    if management.allowHighestGrade ~= false and isHighestJobGrade(job) then return true end
     return false
 end
 
