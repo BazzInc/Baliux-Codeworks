@@ -24,8 +24,16 @@ Config.Management = {
     requireBoss = true,
     allowedGrades = {
         boss = true,
-        owner = true
-    }
+        owner = true,
+        chief = true,
+        chef = true,
+        leiter = true,
+        inhaber = true,
+        patron = true,
+        ceo = true,
+        manager = true
+    },
+    allowHighestGrade = true
     -- minGrade = 3
 }
 
